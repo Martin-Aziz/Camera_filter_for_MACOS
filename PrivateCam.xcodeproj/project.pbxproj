@@ -1,0 +1,435 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* AppMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* AppMain.swift */; };
+		A10000000000000000000002 /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* CameraController.swift */; };
+		A10000000000000000000003 /* com.martinaziz.privatecam.CameraExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* com.martinaziz.privatecam.CameraExtension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A10000000000000000000004 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* main.swift */; };
+		A10000000000000000000005 /* CameraProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* CameraProvider.swift */; };
+		A10000000000000000000006 /* CameraPrivacyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* CameraPrivacyState.swift */; };
+		A10000000000000000000007 /* CameraPrivacyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* CameraPrivacyState.swift */; };
+		A10000000000000000000008 /* BackgroundReplacementProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* BackgroundReplacementProcessor.swift */; };
+		A10000000000000000000009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* Assets.xcassets */; };
+		A10000000000000000000010 /* 1280x720 in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* 1280x720 */; };
+		A10000000000000000000011 /* Previews in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* Previews */; };
+		A10000000000000000000012 /* 1280x720 in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* 1280x720 */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A30000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A40000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A70000000000000000000002;
+			remoteInfo = CameraExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A50000000000000000000001 /* Embed System Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/SystemExtensions;
+			dstSubfolderSpec = 1;
+			files = (
+				A10000000000000000000003 /* com.martinaziz.privatecam.CameraExtension.systemextension in Embed System Extensions */,
+			);
+			name = "Embed System Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* AppMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMain.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
+		A20000000000000000000003 /* Aurevix Cam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Aurevix Cam.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000004 /* com.martinaziz.privatecam.CameraExtension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.martinaziz.privatecam.CameraExtension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000005 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* CameraProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraProvider.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		A20000000000000000000008 /* Extension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Extension.entitlements; sourceTree = "<group>"; };
+		A20000000000000000000009 /* CameraPrivacyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPrivacyState.swift; sourceTree = "<group>"; };
+		A20000000000000000000010 /* BackgroundReplacementProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Prototype/Segmentation/Sources/PrivateCamSegmentation/BackgroundReplacementProcessor.swift; sourceTree = "<group>"; };
+		A20000000000000000000011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = PrivateCam/Assets.xcassets; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000012 /* 1280x720 */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Assets/BackgroundLibrary/Exports/1280x720; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000013 /* Previews */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Assets/BackgroundLibrary/Previews; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A60000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A60000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A80000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A80000000000000000000002 /* PrivateCam */,
+				A20000000000000000000010 /* BackgroundReplacementProcessor.swift */,
+				A20000000000000000000011 /* Assets.xcassets */,
+				A20000000000000000000012 /* 1280x720 */,
+				A20000000000000000000013 /* Previews */,
+				A80000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A80000000000000000000002 /* PrivateCam */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001 /* AppMain.swift */,
+				A20000000000000000000002 /* CameraController.swift */,
+				A20000000000000000000007 /* App.entitlements */,
+				A80000000000000000000004 /* Camera Extension */,
+				A20000000000000000000008 /* Extension.entitlements */,
+				A20000000000000000000009 /* CameraPrivacyState.swift */,
+			);
+			path = PrivateCam;
+			sourceTree = "<group>";
+		};
+		A80000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000003 /* Aurevix Cam.app */,
+				A20000000000000000000004 /* com.martinaziz.privatecam.CameraExtension.systemextension */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A80000000000000000000004 /* Camera Extension */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000005 /* main.swift */,
+				A20000000000000000000006 /* CameraProvider.swift */,
+			);
+			path = "Camera Extension";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A70000000000000000000001 /* PrivateCam */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A90000000000000000000001 /* Build configuration list for PBXNativeTarget "PrivateCam" */;
+			buildPhases = (
+				AA0000000000000000000001 /* Sources */,
+				A60000000000000000000001 /* Frameworks */,
+				A50000000000000000000001 /* Embed System Extensions */,
+				AA0000000000000000000003 /* App Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AB0000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = PrivateCam;
+			productName = "Aurevix Cam";
+			productReference = A20000000000000000000003 /* PrivateCam.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A70000000000000000000002 /* CameraExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A90000000000000000000002 /* Build configuration list for PBXNativeTarget "CameraExtension" */;
+			buildPhases = (
+				AA0000000000000000000002 /* Sources */,
+				A60000000000000000000002 /* Frameworks */,
+				AA0000000000000000000004 /* Extension Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CameraExtension;
+			productName = CameraExtension;
+			productReference = A20000000000000000000004 /* com.martinaziz.privatecam.CameraExtension.systemextension */;
+			productType = "com.apple.product-type.system-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A40000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					A70000000000000000000001 = {
+						CreatedOnToolsVersion = 27.1;
+					};
+					A70000000000000000000002 = {
+						CreatedOnToolsVersion = 27.1;
+					};
+				};
+			};
+			buildConfigurationList = A90000000000000000000003 /* Build configuration list for PBXProject "PrivateCam" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A80000000000000000000001;
+			productRefGroup = A80000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A70000000000000000000001 /* PrivateCam */,
+				A70000000000000000000002 /* CameraExtension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA0000000000000000000003 /* App Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000009 /* Assets.xcassets in Resources */,
+				A10000000000000000000010 /* 1280x720 in Resources */,
+				A10000000000000000000011 /* Previews in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000004 /* Extension Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000012 /* 1280x720 in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA0000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* AppMain.swift in Sources */,
+				A10000000000000000000002 /* CameraController.swift in Sources */,
+				A10000000000000000000006 /* CameraPrivacyState.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000004 /* main.swift in Sources */,
+				A10000000000000000000005 /* CameraProvider.swift in Sources */,
+				A10000000000000000000007 /* CameraPrivacyState.swift in Sources */,
+				A10000000000000000000008 /* BackgroundReplacementProcessor.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AB0000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A70000000000000000000002 /* CameraExtension */;
+			targetProxy = A30000000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AC0000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = PrivateCam/App.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = MPLX762T5G;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Aurevix Cam";
+				INFOPLIST_KEY_CFBundleName = "Aurevix Cam";
+				INFOPLIST_KEY_CFBundleShortVersionString = 1.0;
+				INFOPLIST_KEY_CFBundleVersion = 14;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Aurevix Cam uses camera access for local capture and privacy processing. Unfiltered passthrough is limited to explicit Debug diagnostics.";
+				INFOPLIST_KEY_NSSystemExtensionUsageDescription = "Aurevix Cam installs a virtual camera that publishes safe neutral output until local privacy processing is available.";
+				ENABLE_RESOURCE_ACCESS_CAMERA = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.martinaziz.privatecam;
+				PRODUCT_NAME = "Aurevix Cam";
+				CURRENT_PROJECT_VERSION = 15;
+				MARKETING_VERSION = 1.0;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AC0000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = PrivateCam/App.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = MPLX762T5G;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Aurevix Cam";
+				INFOPLIST_KEY_CFBundleName = "Aurevix Cam";
+				INFOPLIST_KEY_CFBundleShortVersionString = 1.0;
+				INFOPLIST_KEY_CFBundleVersion = 14;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Aurevix Cam uses camera access for local capture and privacy processing. Unfiltered passthrough is limited to explicit Debug diagnostics.";
+				INFOPLIST_KEY_NSSystemExtensionUsageDescription = "Aurevix Cam installs a virtual camera that publishes safe neutral output until local privacy processing is available.";
+				ENABLE_RESOURCE_ACCESS_CAMERA = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.martinaziz.privatecam;
+				PRODUCT_NAME = "Aurevix Cam";
+				CURRENT_PROJECT_VERSION = 15;
+				MARKETING_VERSION = 1.0;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		AC0000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = PrivateCam/Extension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = MPLX762T5G;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = NO;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "PrivateCam/Camera Extension/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Aurevix Cam Camera";
+				INFOPLIST_KEY_CFBundleShortVersionString = 1.0;
+				INFOPLIST_KEY_CFBundleVersion = 14;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				CURRENT_PROJECT_VERSION = 15;
+				PRODUCT_BUNDLE_IDENTIFIER = com.martinaziz.privatecam.CameraExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				WRAPPER_NAME = "$(PRODUCT_BUNDLE_IDENTIFIER).systemextension";
+			};
+			name = Debug;
+		};
+		AC0000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = PrivateCam/Extension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = MPLX762T5G;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = NO;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "PrivateCam/Camera Extension/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Aurevix Cam Camera";
+				INFOPLIST_KEY_CFBundleShortVersionString = 1.0;
+				INFOPLIST_KEY_CFBundleVersion = 14;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				CURRENT_PROJECT_VERSION = 15;
+				PRODUCT_BUNDLE_IDENTIFIER = com.martinaziz.privatecam.CameraExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				WRAPPER_NAME = "$(PRODUCT_BUNDLE_IDENTIFIER).systemextension";
+			};
+			name = Release;
+		};
+		AC0000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AC0000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A90000000000000000000001 /* Build configuration list for PBXNativeTarget "PrivateCam" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AC0000000000000000000001 /* Debug */,
+				AC0000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A90000000000000000000002 /* Build configuration list for PBXNativeTarget "CameraExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AC0000000000000000000003 /* Debug */,
+				AC0000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A90000000000000000000003 /* Build configuration list for PBXProject "PrivateCam" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AC0000000000000000000005 /* Debug */,
+				AC0000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A40000000000000000000001 /* Project object */;
+}

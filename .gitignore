@@ -1,0 +1,45 @@
+/build/
+/artifacts/
+.DS_Store
+/DerivedData/
+**/DerivedData/
+**/.build/
+**/xcuserdata/
+*.xcuserstate
+
+# Local image/video test outputs and camera recordings
+*.mov
+*.mp4
+*.m4v
+*.avi
+*.mkv
+*.png
+*.jpg
+*.jpeg
+*.heic
+*.tif
+*.tiff
+!Prototype/Segmentation/Tests/PrivateCamSegmentationTests/Fixtures/Portrait-CC0.jpg
+recordings/
+captures/
+artifacts/segmentation/
+
+# Signing material and local configuration
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.p8
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+*.xcarchive/
+*.dSYM/
+*.ipa
+
+# Generated runtime evidence and audit bundles
+docs/gates/evidence/
+docs/gates/Archive.zip
+PRIVATECAM_CURRENT_STATE_AUDIT_EVIDENCE.zip
+PRIVATECAM_CURRENT_STATE_AUDIT_EVIDENCE.zip.sha256
