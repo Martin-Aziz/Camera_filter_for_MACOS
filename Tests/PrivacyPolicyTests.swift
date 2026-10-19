@@ -93,28 +93,38 @@ private enum PrivacyPolicyTests {
             defaults.removePersistentDomain(forName: name)
             return actual == expected
         }
-        check("photo preset identity and shared imported path persist without changing legacy keys") {
+        check("imported photo identity and shared path persist without changing legacy keys") {
             let name = "AurevixCamTests-\(UUID().uuidString)"
             let defaults = UserDefaults(suiteName: name)!
             let expected = CameraProcessingConfiguration(mode: .image, blurPreset: .softBlue,
-                backgroundPresetID: "quiet-office", backgroundFilePath: "/shared/Backgrounds/Imported/example.jpg")
+                backgroundPresetID: "imported", backgroundFilePath: "/shared/Backgrounds/Imported/example.jpg")
             expected.write(to: defaults)
             let actual = CameraProcessingConfiguration.read(from: defaults)
             defaults.removePersistentDomain(forName: name)
             return actual == expected && CameraProcessingConfiguration.modeKey == "privateCamBackgroundMode"
                 && CameraProcessingConfiguration.blurPresetKey == "privateCamBackgroundBlurPreset"
         }
-        check("gallery photo selection publishes image mode and clears a prior imported path") {
-            var value = CameraProcessingConfiguration(mode: .image, backgroundPresetID: "imported",
-                backgroundFilePath: "/shared/Backgrounds/Imported/old.jpg")
-            value.selectBackground(presetID: "beach-sunrise")
+        check("deleted stock photo selection migrates to safe Soft Blue") {
             let name = "AurevixCamSelection-\(UUID().uuidString)"
             let defaults = UserDefaults(suiteName: name)!
-            value.write(to: defaults)
+            defaults.set("image", forKey: CameraProcessingConfiguration.modeKey)
+            defaults.set("quiet-office", forKey: CameraProcessingConfiguration.backgroundPresetIDKey)
+            defaults.set("/obsolete/quiet-office.jpg", forKey: CameraProcessingConfiguration.backgroundFilePathKey)
             let selected = CameraProcessingConfiguration.read(from: defaults)
             defaults.removePersistentDomain(forName: name)
-            return selected.mode == .image && selected.backgroundPresetID == "beach-sunrise"
-                && selected.backgroundFilePath.isEmpty
+            return selected.mode == .blur && selected.blurPreset == .softBlue
+                && selected.backgroundPresetID == "soft-blue" && selected.backgroundFilePath.isEmpty
+        }
+        check("personal imported photo remains selected during preference migration") {
+            let name = "AurevixCamPhotoMigration-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: name)!
+            defaults.set("image", forKey: CameraProcessingConfiguration.modeKey)
+            defaults.set("imported", forKey: CameraProcessingConfiguration.backgroundPresetIDKey)
+            defaults.set("/group/Backgrounds/Imported/personal.jpg", forKey: CameraProcessingConfiguration.backgroundFilePathKey)
+            let selected = CameraProcessingConfiguration.read(from: defaults)
+            defaults.removePersistentDomain(forName: name)
+            return selected.mode == .image && selected.backgroundPresetID == "imported"
+                && selected.backgroundFilePath == "/group/Backgrounds/Imported/personal.jpg"
         }
         check("Soft Blue selection restores the cached gradient treatment") {
             var value = CameraProcessingConfiguration(mode: .image, backgroundPresetID: "quiet-office")

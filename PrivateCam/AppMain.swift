@@ -9,21 +9,19 @@ struct PrivateCamApp: App {
     var body: some Scene {
         WindowGroup("Aurevix Cam", id: "studio") {
             ContentView(controller: controller)
-                .frame(minWidth: 660, minHeight: 480)
+                .frame(minWidth: 800, minHeight: 480)
         }
         .handlesExternalEvents(matching: ["studio"])
         .commands { CommandGroup(replacing: .newItem) {} }
 
         WindowGroup("About Aurevix Cam", id: "credits") {
-            CreditsView()
-                .frame(width: 470, height: 390)
+            CreditsView().frame(width: 530, height: 470)
         }
 
         MenuBarExtra {
             MenuBarController(controller: controller)
         } label: {
-            Image("AurevixMenuMark").renderingMode(.template)
-                .resizable().scaledToFit().frame(width: 8, height: 8)
+            Image(systemName: "camera").font(.system(size: 15, weight: .regular))
                 .accessibilityLabel("Aurevix Cam")
         }
         .menuBarExtraStyle(.window)
@@ -58,12 +56,9 @@ private struct MenuBarController: View {
             }
             .disabled(!controller.isCapturing && !controller.isStarting && !controller.isDeviceAvailable)
             Menu("Background") {
-                ForEach(BackgroundGalleryPreset.allCases) { preset in
-                    Button(preset.title) { controller.selectBackground(preset.id) }
-                }
-                if controller.importedBackgroundPreview != nil {
+                ForEach(controller.personalBackgrounds, id: \.path) { url in
                     Divider()
-                    Button("Your Photo") { controller.selectImportedBackground() }
+                    Button(url.deletingPathExtension().lastPathComponent) { controller.selectPersonalBackground(url) }
                 }
                 Divider()
                 ForEach([CameraBlurPreset.natural, .soft, .strong]) { preset in
@@ -104,7 +99,7 @@ private struct MenuBarController: View {
                 NSApp.activate(ignoringOtherApps: true)
             }
                 .keyboardShortcut("o")
-            Button("About Aurevix Cam & Credits") { openWindow(id: "credits") }
+            Button("About Aurevix Cam") { openWindow(id: "credits") }
             Button("Quit Aurevix Cam") {
                 controller.stopCapture()
                 NSApp.terminate(nil)
@@ -179,7 +174,7 @@ struct ContentView: View {
                     }.font(.caption2).foregroundStyle(.secondary).lineLimit(1).help(controller.motionStatistics)
                 }
                 .frame(maxWidth: .infinity)
-                effectsPanel.frame(width: 250)
+                effectsPanel.frame(width: 300)
             }
             .padding(20)
             Divider()
@@ -202,13 +197,13 @@ struct ContentView: View {
                     Text(controller.deviceList)
                 }
                 .menuStyle(.borderlessButton)
-                Button("Credits") { openWindow(id: "credits") }
-                    .buttonStyle(.plain).help("Open background image credits and license information")
+                Button("About Aurevix Cam") { openWindow(id: "credits") }
+                    .buttonStyle(.plain).help("About Aurevix Cam")
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
         }
         .background(.background)
-        .frame(minWidth: 760, minHeight: 510)
+        .frame(minWidth: 920, minHeight: 510)
         .onAppear {
             controller.refreshDevices()
             controller.startMonitoringEngineStatus()
@@ -246,11 +241,23 @@ struct ContentView: View {
     private var effectsPanel: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 12) {
-            Text("EFFECTS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text("SKIN REFINEMENT").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Picker("Skin refinement", selection: $controller.skinPreset) {
+                ForEach(SkinRefinementPreset.allCases) { preset in Text(preset.title).tag(preset) }
+            }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Skin refinement preset")
+            if controller.skinPreset == .custom {
+                HStack { Text("Smoothing"); Spacer(); Text("\(Int(controller.skinIntensity / 0.4 * 100))%").monospacedDigit().foregroundStyle(.secondary) }.font(.caption)
+                Slider(value: $controller.skinIntensity, in: 0...0.4).accessibilityLabel("Custom skin smoothing intensity")
+            }
+            Divider()
+            Text("BACKGROUND").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             VStack(spacing: 7) {
                 effectRow("Off / Neutral", symbol: "circle.slash", selected: controller.backgroundMode == .solid && controller.backgroundRed == 0.24) {
                     controller.backgroundMode = .solid
                     controller.setBackgroundColor(red: 0.24, green: 0.27, blue: 0.30)
+                }
+                effectRow("Soft Blue", symbol: "rectangle.fill", selected: controller.backgroundMode == .blur && controller.blurPreset == .softBlue) {
+                    controller.selectBackground("soft-blue")
                 }
                 effectRow("Natural Blur", symbol: "camera.filters", selected: controller.backgroundMode == .blur && controller.blurPreset == .natural) { select(.natural) }
                 effectRow("Soft Blur", symbol: "camera.filters", selected: controller.backgroundMode == .blur && controller.blurPreset == .soft) { select(.soft) }
@@ -259,21 +266,31 @@ struct ContentView: View {
             }
             Divider()
             HStack {
-                Text("BACKGROUNDS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("MY PHOTOS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Spacer()
-                Button("Import Image…") { isImportingBackground = true }
-                    .font(.caption).buttonStyle(.plain)
+                Button("Add Photo") { isImportingBackground = true }.font(.caption).buttonStyle(.plain)
             }
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ForEach(BackgroundGalleryPreset.allCases) { preset in
-                    backgroundCard(preset)
-                }
-                if let image = controller.importedBackgroundPreview {
-                    importedBackgroundCard(image)
+            if controller.personalBackgrounds.isEmpty {
+                Text("No personal photos yet. Add a photo to use it as your background.")
+                    .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+            } else {
+                ForEach(controller.personalBackgrounds, id: \.path) { url in
+                    HStack(spacing: 8) {
+                        Button { controller.selectPersonalBackground(url) } label: {
+                            HStack(spacing: 8) {
+                                if let image = NSImage(contentsOf: url) {
+                                    Image(nsImage: image).resizable().scaledToFill().frame(width: 42, height: 32).clipped().clipShape(RoundedRectangle(cornerRadius: 5))
+                                }
+                                Text(url.deletingPathExtension().lastPathComponent.prefix(18)).lineLimit(1)
+                                Spacer(minLength: 0)
+                                if controller.backgroundMode == .image && controller.backgroundFilePath == url.path { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
+                            }.font(.caption)
+                        }.buttonStyle(.plain).accessibilityLabel("Select photo \(url.lastPathComponent)")
+                        Button { try? controller.removePersonalBackground(url) } label: { Image(systemName: "trash") }
+                            .buttonStyle(.plain).help("Remove Photo")
+                    }
                 }
             }
-            Text("Photos are included under CC0. Import a personal image to use it locally.")
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Divider()
             if controller.backgroundMode == .blur && controller.blurPreset != .softBlue {
                 HStack { Text("Blur strength"); Spacer(); Text("\(Int(controller.blurIntensity * 100))%").monospacedDigit().foregroundStyle(.secondary) }
@@ -295,6 +312,7 @@ struct ContentView: View {
                 controller.blurPreset = .natural
                 controller.blurIntensity = 0.5
                 controller.setBackgroundColor(red: 0.24, green: 0.27, blue: 0.30)
+                controller.skinPreset = .off
             }.buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
         }
         .padding(15)
@@ -315,60 +333,6 @@ struct ContentView: View {
         controller.blurPreset = preset
     }
 
-    private func backgroundCard(_ preset: BackgroundGalleryPreset) -> some View {
-        let selected = preset.id == "soft-blue"
-            ? (controller.backgroundMode == .blur && controller.blurPreset == .softBlue)
-            : (controller.backgroundMode == .image && controller.backgroundPresetID == preset.id)
-        return Button { controller.selectBackground(preset.id) } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Group {
-                    if preset.id == "soft-blue" {
-                        LinearGradient(colors: [Color(red: 0.38, green: 0.55, blue: 0.79), Color(red: 0.88, green: 0.93, blue: 0.98)], startPoint: .top, endPoint: .bottom)
-                    } else if let url = Bundle.main.url(forResource: preset.previewAssetName, withExtension: "jpg", subdirectory: "Previews"),
-                              let image = NSImage(contentsOf: url) {
-                        Image(nsImage: image).resizable().scaledToFill()
-                    } else {
-                        Color.gray.opacity(0.2)
-                    }
-                }
-                .frame(height: 47).frame(maxWidth: .infinity).clipped().clipShape(RoundedRectangle(cornerRadius: 6))
-                HStack(spacing: 3) {
-                    Text(preset.title).lineLimit(1).minimumScaleFactor(0.75)
-                    Spacer(minLength: 0)
-                    if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
-                }.font(.caption2.weight(selected ? .semibold : .regular))
-            }
-            .padding(5)
-            .background(selected ? Color.accentColor.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: selected ? 1.5 : 0.5))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(preset.title) background\(selected ? ", selected" : "")")
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func importedBackgroundCard(_ image: NSImage) -> some View {
-        let selected = controller.backgroundMode == .image && controller.backgroundPresetID == "imported"
-        return Button { controller.selectImportedBackground() } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Image(nsImage: image).resizable().scaledToFill()
-                    .frame(height: 47).frame(maxWidth: .infinity).clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                HStack(spacing: 3) {
-                    Text("Your Photo").lineLimit(1)
-                    Spacer(minLength: 0)
-                    if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
-                }.font(.caption2.weight(selected ? .semibold : .regular))
-            }
-            .padding(5)
-            .background(selected ? Color.accentColor.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: selected ? 1.5 : 0.5))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Your Photo background\(selected ? ", selected" : "")")
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
     private func effectRow(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 9) {
@@ -385,37 +349,24 @@ struct ContentView: View {
     }
 }
 
-private struct BackgroundGalleryPreset: Identifiable, CaseIterable {
-    let id: String
-    let title: String
-    var previewAssetName: String { id }
-    static let allCases = [
-        Self(id: "soft-blue", title: "Soft Blue"),
-        Self(id: "beach-sunrise", title: "Beach Sunrise"),
-        Self(id: "quiet-office", title: "Quiet Office"),
-        Self(id: "warm-lounge", title: "Warm Lounge"),
-        Self(id: "coastal-morning", title: "Coastal Morning")
-    ]
-}
-
 private struct CreditsView: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
+        ScrollView {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Aurevix Cam").font(.title2.weight(.semibold))
-            Text("A local virtual camera with on-device background processing.")
-                .foregroundStyle(.secondary)
-            Text("Developed by Martin")
-                .font(.callout.weight(.medium))
+            Text("Created by Martin Aziz.").font(.callout.weight(.medium))
+            Text("Aurevix Cam is a native macOS virtual-camera application created to make video communication more comfortable, private, and personal.")
+            Text("The application allows users to customize their camera background, use their own photographs, and gently refine their on-camera appearance while keeping video processing on their device.")
+            Text("The goal is to provide a simple, reliable, and elegant camera experience without unnecessary complexity, accounts, or cloud-based video processing.")
             Divider()
-            Text("Background photo credits").font(.headline)
-            Text("Beach Sunrise — Umhlanga Sunrise, Greg Zaal; Quiet Office — Poly Haven Studio, Greg Zaal; Warm Lounge — Anniversary Lounge, Greg Zaal; Coastal Morning — Secluded Beach, Greg Zaal and Rico Cilliers. All supplied by Poly Haven under CC0.")
-                .font(.callout)
-            Link("Poly Haven CC0 license", destination: URL(string: "https://polyhaven.com/license")!)
-            Text("Aurevix Cam is a working name. No trademark or exclusivity claim is made.")
-                .font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Text("Icon artwork: operator supplied Aurevix Cam brand concept.")
-                .font(.caption2).foregroundStyle(.secondary)
+            Text("Creator: Martin Aziz")
+            Text("Platform: macOS")
+            Text("Processing: Local, on-device")
+            Text("Version \(version) (\(build))").font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }.font(.callout).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
         }.padding(22)
     }
 }

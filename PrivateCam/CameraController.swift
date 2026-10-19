@@ -28,6 +28,9 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     @Published var backgroundFilePath = "" { didSet { persistProcessingConfiguration() } }
     @Published private(set) var importedBackgroundPath = ""
     @Published private(set) var importedBackgroundPreview: NSImage?
+    @Published private(set) var personalBackgrounds: [URL] = []
+    @Published var skinPreset: SkinRefinementPreset = .off { didSet { persistSkinConfiguration() } }
+    @Published var skinIntensity: Double = 0.2 { didSet { persistSkinConfiguration() } }
     @Published var processingStatus = "Processing status unavailable. Start a virtual-camera client to confirm."
     @Published var motionStatistics = "Unique processed-video FPS: unavailable (no active stream)"
     @Published var streamHealth = "Stream health: waiting for receiver data."
@@ -81,6 +84,9 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         blurPreset = config.blurPreset
         backgroundPresetID = config.backgroundPresetID
         backgroundFilePath = config.backgroundFilePath
+        // Persist canonicalized preferences so removed stock-scene IDs migrate
+        // once to a supported neutral background while imported photos survive.
+        config.write(to: CameraProcessingConfiguration.sharedDefaults())
         let defaults = CameraProcessingConfiguration.sharedDefaults()
         importedBackgroundPath = config.backgroundPresetID == "imported" && !config.backgroundFilePath.isEmpty
             ? config.backgroundFilePath
@@ -88,6 +94,10 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         if !importedBackgroundPath.isEmpty, FileManager.default.fileExists(atPath: importedBackgroundPath) {
             importedBackgroundPreview = NSImage(contentsOfFile: importedBackgroundPath)
         }
+        let skin = SkinRefinementConfiguration.read()
+        skinPreset = skin.preset
+        skinIntensity = skin.intensity
+        refreshPersonalBackgrounds()
         launchAtLoginEnabled = UserDefaults.standard.bool(forKey: CameraProcessingConfiguration.launchAtLoginKey)
         isRestoringConfiguration = false
         installObservers()
@@ -287,6 +297,51 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         applyProcessingConfiguration(config)
     }
 
+    func selectPersonalBackground(_ url: URL) {
+        guard isManagedPersonalBackground(url), FileManager.default.fileExists(atPath: url.path) else { return }
+        var config = currentProcessingConfiguration()
+        config.selectBackground(presetID: "imported", importedFilePath: url.path)
+        applyProcessingConfiguration(config)
+        importedBackgroundPath = url.path
+        importedBackgroundPreview = NSImage(contentsOf: url)
+        CameraProcessingConfiguration.sharedDefaults()?.set(url.path, forKey: CameraProcessingConfiguration.lastImportedBackgroundFilePathKey)
+    }
+
+    func removePersonalBackground(_ url: URL) throws {
+        guard isManagedPersonalBackground(url) else { return }
+        if currentProcessingConfiguration().backgroundFilePath == url.path {
+            selectBackground("soft-blue")
+        }
+        try FileManager.default.removeItem(at: url)
+        if importedBackgroundPath == url.path { importedBackgroundPath = ""; importedBackgroundPreview = nil }
+        refreshPersonalBackgrounds()
+    }
+
+    private func personalBackgroundDirectory() -> URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: CameraProcessingConfiguration.suiteName)?
+            .appendingPathComponent("Backgrounds/Imported", isDirectory: true)
+    }
+
+    private func isManagedPersonalBackground(_ url: URL) -> Bool {
+        guard let root = personalBackgroundDirectory()?.standardizedFileURL.path else { return false }
+        return url.standardizedFileURL.path.hasPrefix(root + "/")
+    }
+
+    func refreshPersonalBackgrounds() {
+        guard let directory = personalBackgroundDirectory() else { personalBackgrounds = []; return }
+        let urls = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        personalBackgrounds = urls.filter { isManagedPersonalBackground($0) && NSImage(contentsOf: $0) != nil }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        let selected = CameraProcessingConfiguration.read().backgroundFilePath
+        if CameraProcessingConfiguration.read().backgroundPresetID == "imported", !FileManager.default.fileExists(atPath: selected) {
+            selectBackground("soft-blue")
+        }
+    }
+
+    private func persistSkinConfiguration() {
+        guard !isRestoringConfiguration else { return }
+        SkinRefinementConfiguration(preset: skinPreset, intensity: min(max(skinIntensity, 0), 0.4)).write()
+    }
+
     func importBackground(from sourceURL: URL) throws {
         let granted = sourceURL.startAccessingSecurityScopedResource()
         defer { if granted { sourceURL.stopAccessingSecurityScopedResource() } }
@@ -337,6 +392,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
             destination.path, forKey: CameraProcessingConfiguration.lastImportedBackgroundFilePathKey
         )
         importedBackgroundPreview = NSImage(contentsOf: destination)
+        refreshPersonalBackgrounds()
     }
 
     func setBackgroundColor(red: Double, green: Double, blue: Double) {

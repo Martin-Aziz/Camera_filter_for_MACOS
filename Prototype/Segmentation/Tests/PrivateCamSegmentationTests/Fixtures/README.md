@@ -6,3 +6,5 @@
 - License: https://creativecommons.org/publicdomain/zero/1.0/
 - Original dimensions: 5472 × 3648
 - Local fixture SHA-256: `d237bbf13f886b69a376aad00836403dafdb8a6be0062dc98a50e1a6c7b32a48`
+
+`Portrait-Reference.jpg` was supplied inside the Aurevix Cam source update package as a software-test fixture. The package labels it as a demonstration portrait but does not state its source or license. It is used only for local offline refinement tests and is not included in the app bundle.

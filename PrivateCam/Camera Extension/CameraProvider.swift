@@ -540,10 +540,7 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
                 if let sharedRoot, candidate.standardizedFileURL.path.hasPrefix(sharedRoot.appendingPathComponent("Backgrounds/Imported").standardizedFileURL.path + "/") {
                     imageURL = candidate
                 } else { imageURL = nil }
-            } else {
-                let names = ["beach-sunrise", "quiet-office", "warm-lounge", "coastal-morning"]
-                imageURL = names.contains(id) ? Bundle.main.url(forResource: id, withExtension: "jpg", subdirectory: "1280x720") : nil
-            }
+            } else { imageURL = nil }
             if let imageURL { treatment = .photo(id: id, url: imageURL) }
             else { treatment = .solid(BackgroundReplacementProcessor.neutralColor) }
         } else if configuration.blurPreset == .softBlue {
@@ -553,7 +550,9 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         }
         let processStart = DispatchTime.now().uptimeNanoseconds
         onStateQueue { appendBounded(Double(processStart - captureArrivalUptime) / 1_000_000, to: &processingQueueWaitMs) }
-        let result = backgroundProcessor.process(pixelBuffer: source, outputPool: pool, treatment: treatment)
+        let beauty = SkinRefinementConfiguration.read()
+        let result = backgroundProcessor.process(pixelBuffer: source, outputPool: pool, treatment: treatment,
+                                                  skinRefinementIntensity: beauty.effectiveIntensity)
 
         // All checks that authorize publication and the send itself run on the
         // stream state queue. The raw capture buffer is never sent.
@@ -970,14 +969,7 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private func effectDisplayName(for configuration: CameraProcessingConfiguration) -> String {
         if configuration.mode == .solid { return "Solid background" }
         if configuration.mode == .image {
-            switch configuration.backgroundPresetID {
-            case "beach-sunrise": return "Beach Sunrise"
-            case "quiet-office": return "Quiet Office"
-            case "warm-lounge": return "Warm Lounge"
-            case "coastal-morning": return "Coastal Morning"
-            case "imported": return "Imported background"
-            default: return "Neutral fallback"
-            }
+            return configuration.backgroundPresetID == "imported" ? "Imported background" : "Neutral fallback"
         }
         if configuration.blurPreset == .softBlue { return "Soft Blue" }
         return "\(configuration.blurPreset.title) blur"

@@ -68,8 +68,7 @@ struct CameraProcessingConfiguration: Equatable {
     var backgroundPresetID: String = "soft-blue"
     var backgroundFilePath: String = ""
 
-    /// Applies one gallery choice as a complete configuration before writing
-    /// any shared values, so the extension cannot observe a mixed old/new effect.
+    /// Applies a supported background as one complete preference snapshot.
     mutating func selectBackground(presetID: String, importedFilePath: String = "") {
         backgroundPresetID = presetID
         backgroundFilePath = importedFilePath
@@ -84,7 +83,7 @@ struct CameraProcessingConfiguration: Equatable {
     static func read(from defaults: UserDefaults? = UserDefaults(suiteName: suiteName)) -> Self {
         guard let defaults else { return Self() }
         let hasStoredMode = defaults.object(forKey: modeKey) != nil
-        let mode = CameraBackgroundMode(rawValue: defaults.string(forKey: modeKey) ?? "") ?? (hasStoredMode ? .solid : .blur)
+        var mode = CameraBackgroundMode(rawValue: defaults.string(forKey: modeKey) ?? "") ?? (hasStoredMode ? .solid : .blur)
         let red = defaults.object(forKey: redKey) == nil ? 0.24 : defaults.double(forKey: redKey)
         let green = defaults.object(forKey: greenKey) == nil ? 0.27 : defaults.double(forKey: greenKey)
         let blue = defaults.object(forKey: blueKey) == nil ? 0.30 : defaults.double(forKey: blueKey)
@@ -94,11 +93,21 @@ struct CameraProcessingConfiguration: Equatable {
         let intensity = storedIntensity > 1 ? min(max(storedIntensity, 0), 48) / 48 : storedIntensity
         let storedPreset = defaults.string(forKey: blurPresetKey)
         let presetDefault = hasStoredMode ? CameraBlurPreset.natural.rawValue : CameraBlurPreset.softBlue.rawValue
-        let preset = CameraBlurPreset(rawValue: storedPreset ?? presetDefault) ?? .natural
+        var preset = CameraBlurPreset(rawValue: storedPreset ?? presetDefault) ?? .natural
+        var backgroundPresetID = defaults.string(forKey: backgroundPresetIDKey) ?? "soft-blue"
+        var backgroundFilePath = defaults.string(forKey: backgroundFilePathKey) ?? ""
+        // Migrate selections from the removed bundled photo gallery. Preserve
+        // imported user photos; old stock IDs fall back to the safe neutral plate.
+        let supportedImage = backgroundPresetID == "imported"
+        if mode == .image && !supportedImage {
+            mode = .blur
+            preset = .softBlue
+            backgroundPresetID = "soft-blue"
+            backgroundFilePath = ""
+        }
         return Self(mode: mode, red: min(max(red, 0), 1), green: min(max(green, 0), 1),
                     blue: min(max(blue, 0), 1), blurRadius: min(max(intensity, 0), 1), blurPreset: preset,
-                    backgroundPresetID: defaults.string(forKey: backgroundPresetIDKey) ?? "soft-blue",
-                    backgroundFilePath: defaults.string(forKey: backgroundFilePathKey) ?? "")
+                    backgroundPresetID: backgroundPresetID, backgroundFilePath: backgroundFilePath)
     }
 
     func write(to defaults: UserDefaults? = UserDefaults(suiteName: Self.suiteName)) {

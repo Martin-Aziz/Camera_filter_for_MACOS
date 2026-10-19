@@ -1,10 +1,82 @@
 import CoreImage
 import CoreVideo
 import ImageIO
+import Vision
 import XCTest
 @testable import PrivateCamSegmentation
 
 final class SegmentationTests: XCTestCase {
+    func testSkinPresetsIntensityBoundsAndPersistence() {
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .off).effectiveIntensity, 0)
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .subtle).effectiveIntensity, 0.16, accuracy: 0.001)
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .refined).effectiveIntensity, 0.30, accuracy: 0.001)
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .custom, intensity: 9).effectiveIntensity, 0.4)
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .custom, intensity: -2).effectiveIntensity, 0)
+        let suite = "AurevixCamTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        SkinRefinementConfiguration(preset: .refined, intensity: 0.73).write(to: defaults)
+        let restored = SkinRefinementConfiguration.read(from: defaults)
+        XCTAssertEqual(restored.preset, .refined)
+        XCTAssertEqual(restored.intensity, 0.4)
+        XCTAssertEqual(SkinRefinementConfiguration.read(from: UserDefaults(suiteName: suite)).preset, .refined)
+    }
+
+    func testSkinRetouchOffIsIdentityAndEnabledChangesDetectedSkin() throws {
+        // Supplied package portrait is an offline test fixture; it is not an app resource.
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "Portrait-Reference", withExtension: "jpg"))
+        let source = try loadDownsampledImage(at: url, maximumDimension: 640)
+        let input = CIImage(cgImage: source)
+        XCTAssertTrue(NaturalSkinRetouch.apply(to: input, intensity: 0) === input,
+                      "Off must return the untouched Core Image input")
+        let context = CIContext()
+        let subtle = NaturalSkinRetouch.apply(to: input, intensity: 0.16)
+        let refined = NaturalSkinRetouch.apply(to: input, intensity: 0.30)
+        let subtleRendered = try XCTUnwrap(context.createCGImage(subtle, from: subtle.extent))
+        let refinedRendered = try XCTUnwrap(context.createCGImage(refined, from: refined.extent))
+        XCTAssertFalse(imagesEqual(source, subtleRendered), "Subtle should gently refine detected face skin")
+        XCTAssertFalse(imagesEqual(subtleRendered, refinedRendered), "Refined must be distinct and stronger than Subtle")
+    }
+
+    func testSkinRetouchLeavesNonFaceInputAlone() throws {
+        let blank = CIImage(color: CIColor(red: 0.25, green: 0.4, blue: 0.6)).cropped(to: CGRect(x: 0, y: 0, width: 320, height: 240))
+        let output = NaturalSkinRetouch.apply(to: blank, intensity: 0.4)
+        let context = CIContext()
+        let before = try XCTUnwrap(context.createCGImage(blank, from: blank.extent))
+        let after = try XCTUnwrap(context.createCGImage(output, from: output.extent))
+        XCTAssertTrue(imagesEqual(before, after), "No detected face should leave the image unchanged")
+    }
+
+    func testSkinRetouchHandlesTwoFacesAndShiftedFrameIndependently() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "Portrait-Reference", withExtension: "jpg"))
+        let face = try loadDownsampledImage(at: url, maximumDimension: 512)
+        let width = face.width, height = face.height
+        let twoFaceContext = CGContext(data: nil, width: width * 2, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 8, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        twoFaceContext.draw(face, in: CGRect(x: 0, y: 0, width: width, height: height))
+        twoFaceContext.draw(face, in: CGRect(x: width, y: 0, width: width, height: height))
+        let multiFace = try XCTUnwrap(twoFaceContext.makeImage())
+        let request = VNDetectFaceLandmarksRequest()
+        try VNImageRequestHandler(cgImage: multiFace, options: [:]).perform([request])
+        XCTAssertGreaterThanOrEqual(request.results?.count ?? 0, 2, "fixture composition should exercise two detected faces")
+        let multiInput = CIImage(cgImage: multiFace)
+        let multiOutput = NaturalSkinRetouch.apply(to: multiInput, intensity: 0.16)
+        let renderedMulti = try XCTUnwrap(CIContext().createCGImage(multiOutput, from: multiOutput.extent))
+        XCTAssertFalse(imagesEqual(multiFace, renderedMulti), "both detected faces should be eligible for refinement")
+
+        let shiftedContext = CGContext(data: nil, width: width + 64, height: height, bitsPerComponent: 8,
+            bytesPerRow: (width + 64) * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        shiftedContext.setFillColor(CGColor(gray: 0.4, alpha: 1))
+        shiftedContext.fill(CGRect(x: 0, y: 0, width: width + 64, height: height))
+        shiftedContext.draw(face, in: CGRect(x: 64, y: 0, width: width, height: height))
+        let shifted = try XCTUnwrap(shiftedContext.makeImage())
+        let shiftedInput = CIImage(cgImage: shifted)
+        let shiftedOutput = NaturalSkinRetouch.apply(to: shiftedInput, intensity: 0.16)
+        XCTAssertEqual(shiftedOutput.extent, shiftedInput.extent, "frame-to-frame movement must not reuse stale mask geometry")
+    }
+
     func testMissingFrameReturnsNeutralFallbackWithRequestedSize() {
         let processor = BackgroundReplacementProcessor(quality: .fast)
         let result = processor.process(nil, fallbackSize: CGSize(width: 321, height: 241))

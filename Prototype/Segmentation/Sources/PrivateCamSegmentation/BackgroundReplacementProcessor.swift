@@ -2,6 +2,70 @@ import CoreImage
 import CoreVideo
 import ImageIO
 import Vision
+import Foundation
+public enum NaturalSkinRetouch {
+    /// Returns the foreground with low-strength skin-only smoothing. Eye, brow,
+    /// lip and contour landmark regions are excluded from the mask.
+    public static func apply(to image: CIImage, intensity: Double) -> CIImage {
+        let strength = min(max(intensity, 0), 0.4)
+        guard strength > 0, image.extent.width > 0, image.extent.height > 0 else { return image }
+        let request = VNDetectFaceLandmarksRequest()
+        request.revision = VNDetectFaceLandmarksRequestRevision3
+        let analysisScale = min(1, 320 / max(image.extent.width, image.extent.height))
+        let analysisImage = analysisScale < 1
+            ? image.transformed(by: CGAffineTransform(scaleX: analysisScale, y: analysisScale))
+            : image
+        do {
+            try VNImageRequestHandler(ciImage: analysisImage, options: [:]).perform([request])
+        } catch { return image }
+        guard let faces = request.results, !faces.isEmpty else { return image }
+        let extent = image.extent.integral
+        let width = Int(extent.width), height = Int(extent.height)
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return image }
+        context.setFillColor(gray: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        for face in faces {
+            let box = face.boundingBox
+            let rect = CGRect(x: box.minX * extent.width, y: box.minY * extent.height,
+                              width: box.width * extent.width, height: box.height * extent.height)
+            context.setFillColor(gray: CGFloat(strength), alpha: 1)
+            if let contour = face.landmarks?.faceContour, contour.pointCount > 2 {
+                let path = landmarkPath(contour, face: face, extent: extent)
+                context.addPath(path); context.fillPath()
+            } else {
+                context.fillEllipse(in: rect.insetBy(dx: rect.width * 0.08, dy: rect.height * 0.05))
+            }
+            context.setFillColor(gray: 0, alpha: 1)
+            for region in [face.landmarks?.leftEye, face.landmarks?.rightEye, face.landmarks?.leftEyebrow,
+                           face.landmarks?.rightEyebrow, face.landmarks?.outerLips, face.landmarks?.innerLips,
+                           face.landmarks?.nose] .compactMap({ $0 }) {
+                let path = landmarkPath(region, face: face, extent: extent)
+                context.addPath(path); context.fillPath()
+            }
+        }
+        guard let maskCG = context.makeImage() else { return image }
+        let mask = CIImage(cgImage: maskCG).transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
+        let radius = 0.8 + strength * 2.5
+        let softened = image.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius]).cropped(to: extent)
+        return softened.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: image,
+            kCIInputMaskImageKey: mask
+        ]).cropped(to: extent)
+    }
+
+    private static func landmarkPath(_ region: VNFaceLandmarkRegion2D, face: VNFaceObservation, extent: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        let box = face.boundingBox
+        for (index, point) in region.normalizedPoints.enumerated() {
+            let x = extent.minX + (box.minX + CGFloat(point.x) * box.width) * extent.width
+            let y = extent.minY + (box.minY + CGFloat(point.y) * box.height) * extent.height
+            if index == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        path.closeSubpath()
+        return path
+    }
+}
 
 public enum SegmentationQuality: String, CaseIterable {
     case fast
@@ -183,6 +247,7 @@ public final class BackgroundReplacementProcessor {
         pixelBuffer source: CVPixelBuffer,
         outputPool: CVPixelBufferPool,
         treatment: BackgroundTreatment,
+        skinRefinementIntensity: Double = 0,
         fault: BackgroundProcessingFault = .none
     ) -> RealtimeBackgroundProcessingResult {
         let width = CVPixelBufferGetWidth(source)
@@ -227,6 +292,7 @@ public final class BackgroundReplacementProcessor {
         let segmentationMilliseconds = elapsedMilliseconds(since: segmentationStart)
         let compositingStart = DispatchTime.now().uptimeNanoseconds
         let sourceImage = CIImage(cvPixelBuffer: source)
+        let foregroundImage = NaturalSkinRetouch.apply(to: sourceImage, intensity: skinRefinementIntensity)
         // Preserve the matte's soft alpha and remove only subpixel stair steps.
         let scaledMask = mask.transformed(by: CGAffineTransform(
             scaleX: extent.width / mask.extent.width,
@@ -254,7 +320,7 @@ public final class BackgroundReplacementProcessor {
             }
             background = plate
         }
-        let composite = composite(foreground: sourceImage, background: background, mask: refinedMask,
+        let composite = composite(foreground: foregroundImage, background: background, mask: refinedMask,
                                   treatment: treatment, extent: extent)
         guard fault != .compositingFailure,
               let destination = allocate(from: outputPool),

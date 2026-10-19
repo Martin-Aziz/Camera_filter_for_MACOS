@@ -4,15 +4,13 @@ Aurevix Cam is a native macOS virtual camera with local Vision and Core Image ba
 
 ## Current source state
 
-The current source is build 15. It includes user-imported backgrounds and the App Sandbox read-only entitlement required to open user-selected image files. Build 15 has been built and signed as a candidate but has not been installed. The active system extension remains build 14. Camera UUID, stream UUID, bundle identifiers, Team ID, App Group, and existing preference keys remain stable. Opening the app does not start the camera.
+The current source candidate is build 16. It has been built and signed but has not been installed; the installed app and active system extension remain build 14. It includes user-imported backgrounds and the App Sandbox read-only entitlement required to open user-selected image files. Camera UUID, stream UUID, bundle identifiers, Team ID, App Group, and existing preference keys remain stable. Opening the app does not start the camera.
 
 Open `PrivateCam.xcodeproj`, select the `PrivateCam` scheme, and build Debug or Release. The scheme and internal product target retain their historical identifier for compatibility.
 
-## Background library
+## Backgrounds
 
-Soft Blue is generated procedurally. Four sample scenes are from Poly Haven and licensed CC0: Beach Sunrise, Quiet Office, Warm Lounge, and Coastal Morning. The project contains source originals and provenance under `Assets/BackgroundLibrary`; the app and extension ship 1280×720 optimized copies, with thumbnails in the host app. The 1920×1080 exports are retained as quality masters. Imported images are normalized for orientation, downsampled to a bounded size, and stored locally in the shared App Group container. Studio shows the current upload as “Your Photo,” keeps it available when switching presets, and sends its local path to the extension for photo compositing.
-
-See `Assets/BackgroundLibrary/manifest.json` and the [Poly Haven license](https://polyhaven.com/license) for source and export hashes and attribution.
+Aurevix Cam provides local Soft Blue, solid-color, and blur treatments. Users can import personal photographs, which are normalized and stored in the shared App Group container for use by the camera extension. Removed bundled photographic scenes are no longer selectable or included in the application.
 
 ## Naming
 
