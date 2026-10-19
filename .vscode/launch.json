@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Camera_filter_for_MACOS}/Prototype/Segmentation",
+            "name": "Debug segmentation-benchmark (Prototype/Segmentation)",
+            "target": "segmentation-benchmark",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug segmentation-benchmark (Prototype/Segmentation)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Camera_filter_for_MACOS}/Prototype/Segmentation",
+            "name": "Release segmentation-benchmark (Prototype/Segmentation)",
+            "target": "segmentation-benchmark",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release segmentation-benchmark (Prototype/Segmentation)"
+        }
+    ]
+}

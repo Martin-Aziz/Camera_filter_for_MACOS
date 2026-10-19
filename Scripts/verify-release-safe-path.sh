@@ -38,7 +38,7 @@ assert 'static let modeKey' in privacy and 'static func writeEngineStatus' in pr
 assert 'frameAgeMilliseconds <= 100' in privacy, 'publication age limit is not 100 ms'
 info=plistlib.loads((ext/'Contents/Info.plist').read_bytes())
 assert info['CFBundleIdentifier']=='com.martinaziz.privatecam.CameraExtension'
-assert str(info['CFBundleVersion'])=='13', f"expected extension successor build 13; found {info['CFBundleVersion']}"
+assert str(info['CFBundleVersion'])=='19', f"expected Directive 020E final candidate build 19; found {info['CFBundleVersion']}"
 binary=ext/'Contents/MacOS/CameraExtension'
 strings=subprocess.run(['/usr/bin/strings','-a',str(binary)],check=True,capture_output=True,text=True).stdout
 assert 'development-only unfiltered camera lease granted' not in strings, 'raw development authorization path remains in Release binary'

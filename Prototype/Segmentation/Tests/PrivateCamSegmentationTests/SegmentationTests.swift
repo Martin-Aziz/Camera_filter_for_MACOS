@@ -24,7 +24,7 @@ final class SegmentationTests: XCTestCase {
 
     func testSkinRetouchOffIsIdentityAndEnabledChangesDetectedSkin() throws {
         // Supplied package portrait is an offline test fixture; it is not an app resource.
-        let url = try XCTUnwrap(Bundle.module.url(forResource: "Portrait-Reference", withExtension: "jpg"))
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "SkinTest-medium-brown", withExtension: "png"))
         let source = try loadDownsampledImage(at: url, maximumDimension: 640)
         let input = CIImage(cgImage: source)
         XCTAssertTrue(NaturalSkinRetouch.apply(to: input, intensity: 0) === input,
@@ -38,6 +38,34 @@ final class SegmentationTests: XCTestCase {
         XCTAssertFalse(imagesEqual(subtleRendered, refinedRendered), "Refined must be distinct and stronger than Subtle")
     }
 
+    func testSkinMaskContextAllocationFailureNeverBecomesImageShapedMask() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "SkinTest-medium-brown", withExtension: "png"))
+        let source = try loadDownsampledImage(at: url, maximumDimension: 480)
+        let input = CIImage(cgImage: source)
+        let failedMask = NaturalSkinRetouch.diagnosticMask(for: input, intensity: 0.30,
+                                                            failGrayscaleContextAllocation: true)
+        XCTAssertNil(failedMask, "failed grayscale mask allocation must return nil, never the source frame")
+        let output = NaturalSkinRetouch.applyForCalibration(to: input, intensity: 0.30,
+            noiseLevel: 0.03, sharpness: 0.65, blendScale: 1,
+            failGrayscaleContextAllocation: true)
+        XCTAssertTrue(output === input, "a missing mask should retain the existing safe no-op path")
+    }
+
+    func testApprovedSkinSettingsAreUsedByProductionPresets() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "SkinTest-medium-brown", withExtension: "png"))
+        let source = CIImage(cgImage: try loadDownsampledImage(at: url, maximumDimension: 480))
+        let context = CIContext()
+        for (intensity, approvedBlend) in [(0.16, 1.0), (0.30, 1.08)] {
+            let production = NaturalSkinRetouch.apply(to: source, intensity: intensity)
+            let approved = NaturalSkinRetouch.applyForCalibration(to: source, intensity: intensity,
+                noiseLevel: 0.06, sharpness: 0.82, blendScale: approvedBlend)
+            let productionImage = try XCTUnwrap(context.createCGImage(production, from: production.extent))
+            let approvedImage = try XCTUnwrap(context.createCGImage(approved, from: approved.extent))
+            XCTAssertTrue(imagesEqual(productionImage, approvedImage),
+                "production intensity \(intensity) must use the approved denoise and blend settings")
+        }
+    }
+
     func testSkinRetouchLeavesNonFaceInputAlone() throws {
         let blank = CIImage(color: CIColor(red: 0.25, green: 0.4, blue: 0.6)).cropped(to: CGRect(x: 0, y: 0, width: 320, height: 240))
         let output = NaturalSkinRetouch.apply(to: blank, intensity: 0.4)
@@ -47,8 +75,32 @@ final class SegmentationTests: XCTestCase {
         XCTAssertTrue(imagesEqual(before, after), "No detected face should leave the image unchanged")
     }
 
+    func testSkinRetouchStrengthIsSmoothlyMonotonicAcrossFourSyntheticPortraits() throws {
+        let names = ["SkinTest-medium-brown", "SkinTest-light-textured", "SkinTest-deep-lowkey", "SkinTest-light-medium"]
+        let strengths: [Double] = [0.10, 0.16, 0.20, 0.30, 0.40]
+        let context = CIContext()
+        for name in names {
+            let url = try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "png"))
+            let source = try loadDownsampledImage(at: url, maximumDimension: 480)
+            let input = CIImage(cgImage: source)
+            let mask = try XCTUnwrap(NaturalSkinRetouch.diagnosticMask(for: input, intensity: 0.4))
+            XCTAssertEqual(mask.extent, input.extent, "\(name): diagnostic mask must align to the frame")
+            let maskImage = try XCTUnwrap(context.createCGImage(mask, from: mask.extent))
+            XCTAssertGreaterThan(maskImage.pixelLumaAverage, 0.01, "\(name): mask should cover detected facial skin")
+            XCTAssertLessThan(maskImage.pixelLumaAverage, 0.5, "\(name): mask should remain spatially selective")
+            var prior = -Double.infinity
+            for strength in strengths {
+                let output = NaturalSkinRetouch.apply(to: input, intensity: strength)
+                let rendered = try XCTUnwrap(context.createCGImage(output, from: output.extent))
+                let difference = meanAbsoluteDifference(source, rendered)
+                XCTAssertGreaterThan(difference, prior, "\(name): strength \(strength) should increase monotonically")
+                prior = difference
+            }
+        }
+    }
+
     func testSkinRetouchHandlesTwoFacesAndShiftedFrameIndependently() throws {
-        let url = try XCTUnwrap(Bundle.module.url(forResource: "Portrait-Reference", withExtension: "jpg"))
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "SkinTest-medium-brown", withExtension: "png"))
         let face = try loadDownsampledImage(at: url, maximumDimension: 512)
         let width = face.width, height = face.height
         let twoFaceContext = CGContext(data: nil, width: width * 2, height: height, bitsPerComponent: 8,
@@ -133,11 +185,16 @@ final class SegmentationTests: XCTestCase {
         let pool = try makeNV12Pool()
         let source = try makeNV12Buffer(from: CIImage(color: CIColor(red: 0.95, green: 0.03, blue: 0.04)), pool: pool)
         let processor = BackgroundReplacementProcessor(quality: .fast)
-        for fault in [BackgroundProcessingFault.visionFailure, .invalidMaskDimensions, .compositingFailure] {
+        for fault in [BackgroundProcessingFault.visionFailure, .noMask, .invalidMaskDimensions, .compositingFailure] {
             let result = processor.process(pixelBuffer: source, outputPool: pool,
                                            treatment: .blur(radius: 24), fault: fault)
             XCTAssertTrue(result.usedNeutralFallback, "fault \(fault) should choose neutral output")
             XCTAssertNotNil(result.failureReason)
+            if fault == .invalidMaskDimensions {
+                XCTAssertTrue(result.failureReason?.contains("mask=") == true)
+                XCTAssertTrue(result.failureReason?.contains("Y=1280x720") == true)
+                XCTAssertTrue(result.failureReason?.contains("quality=fast revision=") == true)
+            }
             XCTAssertFalse(result.pixelBuffer === source, "fault \(fault) forwarded source buffer")
             XCTAssertEqual(CVPixelBufferGetWidth(result.pixelBuffer), 1280)
             XCTAssertEqual(CVPixelBufferGetHeight(result.pixelBuffer), 720)
@@ -270,11 +327,79 @@ final class SegmentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(abs(Int(chroma.1) - 128), 4)
     }
 
+    func testMaskAlignmentAcceptsReducedResolutionAndNonzeroOrigin() throws {
+        let destination = CGRect(x: 0, y: 0, width: 1280, height: 720)
+        let mask = CIImage(color: .white).cropped(to: CGRect(x: 13, y: -7, width: 256, height: 192))
+        let aligned = try XCTUnwrap(SegmentationMaskGeometry.align(mask, to: destination))
+        XCTAssertEqual(aligned.image.extent, destination)
+        XCTAssertEqual(aligned.transform.tx, -65, accuracy: 0.001)
+        XCTAssertEqual(aligned.transform.ty, 26.25, accuracy: 0.001)
+        XCTAssertNil(SegmentationMaskGeometry.align(CIImage.empty(), to: destination))
+        XCTAssertNil(SegmentationMaskGeometry.align(mask, to: .zero))
+        let malformed = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 10, height: 100))
+        XCTAssertNil(SegmentationMaskGeometry.align(malformed, to: destination))
+    }
+
+    func testRealtimeQualityResolutionAndNV12RangeMatrix() throws {
+        let cases: [(Int, Int)] = [(640, 480), (1280, 720), (1920, 1080), (480, 640)]
+        for (width, height) in cases {
+            for format in [kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                           kCVPixelFormatType_420YpCbCr8BiPlanarFullRange] {
+                let pool = try makePool(width: width, height: height, format: format)
+                let source = try makeBuffer(from: CIImage(color: CIColor(red: 0.56, green: 0.35, blue: 0.27)), pool: pool)
+                for quality in SegmentationQuality.allCases {
+                    let result = BackgroundReplacementProcessor(quality: quality).process(pixelBuffer: source,
+                        outputPool: pool, treatment: .solid(BackgroundReplacementProcessor.neutralColor))
+                    XCTAssertFalse(result.usedNeutralFallback,
+                        "\(quality.rawValue) \(width)x\(height) format=0x\(String(format, radix: 16)): \(result.failureReason ?? "") \(result.processingDiagnostics ?? "")")
+                    XCTAssertEqual(CVPixelBufferGetWidth(result.pixelBuffer), width)
+                    XCTAssertEqual(CVPixelBufferGetHeight(result.pixelBuffer), height)
+                    XCTAssertEqual(CVPixelBufferGetPixelFormatType(result.pixelBuffer), format)
+                }
+            }
+        }
+    }
+
+    func testRealtimeBGRAAndMalformedMaskFallback() throws {
+        let pool = try makePool(width: 640, height: 480, format: kCVPixelFormatType_32BGRA)
+        let source = try makeBuffer(from: CIImage(color: CIColor(red: 0.6, green: 0.4, blue: 0.3)), pool: pool)
+        for quality in SegmentationQuality.allCases {
+            let success = BackgroundReplacementProcessor(quality: quality).process(pixelBuffer: source,
+                outputPool: pool, treatment: .solid(BackgroundReplacementProcessor.neutralColor))
+            XCTAssertFalse(success.usedNeutralFallback, "\(quality.rawValue): \(success.failureReason ?? "")")
+            XCTAssertEqual(CVPixelBufferGetPixelFormatType(success.pixelBuffer), kCVPixelFormatType_32BGRA)
+        }
+        let malformed = BackgroundReplacementProcessor(quality: .fast).process(pixelBuffer: source,
+            outputPool: pool, treatment: .solid(BackgroundReplacementProcessor.neutralColor), fault: .invalidMaskDimensions)
+        XCTAssertTrue(malformed.usedNeutralFallback)
+        XCTAssertNotNil(malformed.failureReason)
+        XCTAssertFalse(malformed.pixelBuffer === source)
+    }
+
+    func testRepeatedAndChangingFrameDimensionsReuseProcessorSafely() throws {
+        let processor = BackgroundReplacementProcessor(quality: .accurate)
+        for (width, height) in [(640, 480), (1280, 720), (640, 480), (1920, 1080), (480, 640)] {
+            let pool = try makePool(width: width, height: height,
+                                    format: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+            let source = try makeBuffer(from: CIImage(color: CIColor(red: 0.4, green: 0.5, blue: 0.6)), pool: pool)
+            let result = processor.process(pixelBuffer: source, outputPool: pool,
+                treatment: .solid(BackgroundReplacementProcessor.neutralColor))
+            XCTAssertFalse(result.usedNeutralFallback,
+                "\(width)x\(height): \(result.failureReason ?? "") \(result.processingDiagnostics ?? "")")
+            XCTAssertEqual(CVPixelBufferGetWidth(result.pixelBuffer), width)
+            XCTAssertEqual(CVPixelBufferGetHeight(result.pixelBuffer), height)
+        }
+    }
+
     private func makeNV12Pool() throws -> CVPixelBufferPool {
+        try makePool(width: 1280, height: 720, format: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+    }
+
+    private func makePool(width: Int, height: Int, format: OSType) throws -> CVPixelBufferPool {
         let attributes: [CFString: Any] = [
-            kCVPixelBufferWidthKey: 1280,
-            kCVPixelBufferHeightKey: 720,
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            kCVPixelBufferWidthKey: width,
+            kCVPixelBufferHeightKey: height,
+            kCVPixelBufferPixelFormatTypeKey: format,
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
         ]
         var pool: CVPixelBufferPool?
@@ -283,10 +408,15 @@ final class SegmentationTests: XCTestCase {
     }
 
     private func makeNV12Buffer(from image: CIImage, pool: CVPixelBufferPool) throws -> CVPixelBuffer {
+        try makeBuffer(from: image, pool: pool)
+    }
+
+    private func makeBuffer(from image: CIImage, pool: CVPixelBufferPool) throws -> CVPixelBuffer {
         var buffer: CVPixelBuffer?
         XCTAssertEqual(CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &buffer), kCVReturnSuccess)
         let source = try XCTUnwrap(buffer)
-        let cropped = image.cropped(to: CGRect(x: 0, y: 0, width: 1280, height: 720))
+        let cropped = image.cropped(to: CGRect(x: 0, y: 0,
+            width: CVPixelBufferGetWidth(source), height: CVPixelBufferGetHeight(source)))
         CIContext().render(cropped, to: source, bounds: cropped.extent,
                            colorSpace: CGColorSpaceCreateDeviceRGB())
         return source
@@ -308,5 +438,45 @@ final class SegmentationTests: XCTestCase {
               let leftData = left.dataProvider?.data as Data?,
               let rightData = right.dataProvider?.data as Data? else { return false }
         return leftData == rightData
+    }
+
+    private func meanAbsoluteDifference(_ left: CGImage, _ right: CGImage) -> Double {
+        guard left.width == right.width, left.height == right.height else { return 0 }
+        let width = left.width, height = left.height
+        var a = [UInt8](repeating: 0, count: width * height * 4)
+        var b = [UInt8](repeating: 0, count: width * height * 4)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        a.withUnsafeMutableBytes { raw in
+            if let context = CGContext(data: raw.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) { context.draw(left, in: CGRect(x: 0, y: 0, width: width, height: height)) }
+        }
+        b.withUnsafeMutableBytes { raw in
+            if let context = CGContext(data: raw.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) { context.draw(right, in: CGRect(x: 0, y: 0, width: width, height: height)) }
+        }
+        var total = 0.0
+        for i in stride(from: 0, to: a.count, by: 4) {
+            let red = Double(abs(Int(a[i]) - Int(b[i])))
+            let green = Double(abs(Int(a[i + 1]) - Int(b[i + 1])))
+            let blue = Double(abs(Int(a[i + 2]) - Int(b[i + 2])))
+            total += (red + green + blue) / 3
+        }
+        return total / Double(width * height)
+    }
+}
+
+private extension CGImage {
+    var pixelLumaAverage: Double {
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { raw in
+            if let context = CGContext(data: raw.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                context.draw(self, in: CGRect(x: 0, y: 0, width: width, height: height))
+            }
+        }
+        return stride(from: 0, to: bytes.count, by: 4).reduce(0.0) { $0 + Double(bytes[$1]) / 255 } / Double(width * height)
     }
 }

@@ -69,6 +69,7 @@ enum SegmentationBenchmark {
                 maskFeatherRadius: options.edgeRefine)
             var realtimeResults: [RealtimeTiming] = []
             var realtimeFinalBuffer: CVPixelBuffer?
+            var realtimeDiagnostics: String?
             for index in 0..<(options.iterations + 3) {
                 let result = realtimeProcessor.process(pixelBuffer: nv12Source, outputPool: nv12Pool,
                                                        treatment: treatment)
@@ -77,6 +78,7 @@ enum SegmentationBenchmark {
                         compositing: result.compositingMilliseconds, fallback: result.usedNeutralFallback,
                         failureReason: result.failureReason))
                     realtimeFinalBuffer = result.pixelBuffer
+                    realtimeDiagnostics = result.processingDiagnostics
                     realtimeCSV += "\(quality.rawValue),\(index - 2),\(format(result.segmentationMilliseconds)),\(format(result.compositingMilliseconds)),\(format(result.segmentationMilliseconds + result.compositingMilliseconds)),\(result.usedNeutralFallback)\n"
                 }
             }
@@ -90,6 +92,7 @@ enum SegmentationBenchmark {
                               userInfo: [NSLocalizedDescriptionKey: "\(quality.rawValue) NV12 processing produced fallback or no render"])
             }
             try savePNG(realtimeImage, to: options.outputDirectory.appendingPathComponent("integrated-after-\(quality.rawValue).png"))
+            if let realtimeDiagnostics { print("integrated_buffer_diagnostics quality=\(quality.rawValue) \(realtimeDiagnostics)") }
             try saveSideBySide(before: source, after: realtimeImage,
                                to: options.outputDirectory.appendingPathComponent("integrated-before-after-\(quality.rawValue).png"))
             let solidResult = realtimeProcessor.process(pixelBuffer: nv12Source, outputPool: nv12Pool,

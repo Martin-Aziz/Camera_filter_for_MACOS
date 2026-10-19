@@ -77,11 +77,13 @@ private enum PrivacyPolicyTests {
             defaults.removePersistentDomain(forName: name)
             return fresh == "Unique processed-video FPS: 27.4" && expired == nil
         }
-        check("blur presets map intensity into restrained perceptual ranges") {
+        check("blur presets map intensity into distinct bounded ranges") {
             CameraBlurPreset.natural.radius(intensity: 0) == 3
                 && CameraBlurPreset.natural.radius(intensity: 1) == 8
                 && CameraBlurPreset.soft.radius(intensity: 0.5) == 11
-                && CameraBlurPreset.strong.radius(intensity: 1) == 22
+                && CameraBlurPreset.strong.radius(intensity: 0) == 20
+                && CameraBlurPreset.strong.radius(intensity: 0.5) == 27
+                && CameraBlurPreset.strong.radius(intensity: 1) == 34
                 && CameraBlurPreset.softBlue.radius(intensity: 0.5) == 0
         }
         check("soft blue preset persists through app group configuration") {
@@ -92,6 +94,38 @@ private enum PrivacyPolicyTests {
             let actual = CameraProcessingConfiguration.read(from: defaults)
             defaults.removePersistentDomain(forName: name)
             return actual == expected
+        }
+        check("Off / Neutral and Solid Background persist as distinct selections") {
+            let name = "AurevixCamBackgroundChoice-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: name)!
+            var neutral = CameraProcessingConfiguration()
+            neutral.selectBackground(presetID: "neutral")
+            neutral.write(to: defaults)
+            let storedNeutral = CameraProcessingConfiguration.read(from: defaults)
+            var solid = storedNeutral
+            solid.selectBackground(presetID: "solid")
+            solid.red = 0.24
+            solid.green = 0.27
+            solid.blue = 0.30
+            solid.write(to: defaults)
+            let storedSolid = CameraProcessingConfiguration.read(from: defaults)
+            defaults.removePersistentDomain(forName: name)
+            return storedNeutral.mode == .solid && storedNeutral.backgroundPresetID == "neutral"
+                && storedSolid.mode == .solid && storedSolid.backgroundPresetID == "solid"
+        }
+        check("legacy solid background selection migrates from its color") {
+            let name = "AurevixCamLegacySolid-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: name)!
+            defaults.set("solid", forKey: CameraProcessingConfiguration.modeKey)
+            defaults.set("soft-blue", forKey: CameraProcessingConfiguration.backgroundPresetIDKey)
+            defaults.set(0.24, forKey: CameraProcessingConfiguration.redKey)
+            defaults.set(0.27, forKey: CameraProcessingConfiguration.greenKey)
+            defaults.set(0.30, forKey: CameraProcessingConfiguration.blueKey)
+            let neutral = CameraProcessingConfiguration.read(from: defaults)
+            defaults.set(0.72, forKey: CameraProcessingConfiguration.redKey)
+            let solid = CameraProcessingConfiguration.read(from: defaults)
+            defaults.removePersistentDomain(forName: name)
+            return neutral.backgroundPresetID == "neutral" && solid.backgroundPresetID == "solid"
         }
         check("imported photo identity and shared path persist without changing legacy keys") {
             let name = "AurevixCamTests-\(UUID().uuidString)"

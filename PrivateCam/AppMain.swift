@@ -116,6 +116,7 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var isImportingBackground = false
     @State private var importError: String?
+    @State private var isPersonalPhotosExpanded = false
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
@@ -228,10 +229,11 @@ struct ContentView: View {
     }
 
     private var statusBadge: some View {
-        let processingActive = controller.processingStatus.lowercased().contains("processing active")
+        let operationalState = controller.operationalState
+        let processingActive = operationalState == .previewRunning
         return HStack(spacing: 6) {
-            Circle().fill(processingActive ? Color.green : (controller.isStarting || controller.isCapturing ? Color.orange : Color.secondary)).frame(width: 7, height: 7)
-            Text(processingActive ? "Processing active" : (controller.isCapturing ? "Privacy fallback" : (controller.isStarting ? "Connecting" : "Ready")))
+            Circle().fill(processingActive ? Color.green : (controller.isStarting ? Color.orange : Color.secondary)).frame(width: 7, height: 7)
+            Text(operationalState.title)
                 .font(.caption.weight(.medium))
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
@@ -250,11 +252,10 @@ struct ContentView: View {
                 Slider(value: $controller.skinIntensity, in: 0...0.4).accessibilityLabel("Custom skin smoothing intensity")
             }
             Divider()
-            Text("BACKGROUND").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text("BACKGROUND FILTERS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             VStack(spacing: 7) {
-                effectRow("Off / Neutral", symbol: "circle.slash", selected: controller.backgroundMode == .solid && controller.backgroundRed == 0.24) {
-                    controller.backgroundMode = .solid
-                    controller.setBackgroundColor(red: 0.24, green: 0.27, blue: 0.30)
+                effectRow("Off / Neutral", symbol: "circle.slash", selected: controller.backgroundMode == .solid && controller.backgroundPresetID == "neutral") {
+                    controller.selectBackground("neutral")
                 }
                 effectRow("Soft Blue", symbol: "rectangle.fill", selected: controller.backgroundMode == .blur && controller.blurPreset == .softBlue) {
                     controller.selectBackground("soft-blue")
@@ -262,34 +263,7 @@ struct ContentView: View {
                 effectRow("Natural Blur", symbol: "camera.filters", selected: controller.backgroundMode == .blur && controller.blurPreset == .natural) { select(.natural) }
                 effectRow("Soft Blur", symbol: "camera.filters", selected: controller.backgroundMode == .blur && controller.blurPreset == .soft) { select(.soft) }
                 effectRow("Strong Blur", symbol: "camera.filters", selected: controller.backgroundMode == .blur && controller.blurPreset == .strong) { select(.strong) }
-                effectRow("Solid Background", symbol: "circle.lefthalf.filled", selected: controller.backgroundMode == .solid && controller.backgroundRed != 0.24) { controller.backgroundMode = .solid }
-            }
-            Divider()
-            HStack {
-                Text("MY PHOTOS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Button("Add Photo") { isImportingBackground = true }.font(.caption).buttonStyle(.plain)
-            }
-            if controller.personalBackgrounds.isEmpty {
-                Text("No personal photos yet. Add a photo to use it as your background.")
-                    .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-            } else {
-                ForEach(controller.personalBackgrounds, id: \.path) { url in
-                    HStack(spacing: 8) {
-                        Button { controller.selectPersonalBackground(url) } label: {
-                            HStack(spacing: 8) {
-                                if let image = NSImage(contentsOf: url) {
-                                    Image(nsImage: image).resizable().scaledToFill().frame(width: 42, height: 32).clipped().clipShape(RoundedRectangle(cornerRadius: 5))
-                                }
-                                Text(url.deletingPathExtension().lastPathComponent.prefix(18)).lineLimit(1)
-                                Spacer(minLength: 0)
-                                if controller.backgroundMode == .image && controller.backgroundFilePath == url.path { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
-                            }.font(.caption)
-                        }.buttonStyle(.plain).accessibilityLabel("Select photo \(url.lastPathComponent)")
-                        Button { try? controller.removePersonalBackground(url) } label: { Image(systemName: "trash") }
-                            .buttonStyle(.plain).help("Remove Photo")
-                    }
-                }
+                effectRow("Solid Background", symbol: "circle.lefthalf.filled", selected: controller.backgroundMode == .solid && controller.backgroundPresetID == "solid") { controller.selectSolidBackground() }
             }
             Divider()
             if controller.backgroundMode == .blur && controller.blurPreset != .softBlue {
@@ -307,6 +281,35 @@ struct ContentView: View {
                     }
                 ))
             }
+            Divider()
+            DisclosureGroup(isExpanded: $isPersonalPhotosExpanded) {
+                if controller.personalBackgrounds.isEmpty {
+                    Text("No personal photos yet. Add a photo to use it as your background.")
+                        .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                } else {
+                    ForEach(controller.personalBackgrounds, id: \.path) { url in
+                        HStack(spacing: 8) {
+                            Button { controller.selectPersonalBackground(url) } label: {
+                                HStack(spacing: 8) {
+                                    if let image = NSImage(contentsOf: url) {
+                                        Image(nsImage: image).resizable().scaledToFill().frame(width: 42, height: 32).clipped().clipShape(RoundedRectangle(cornerRadius: 5))
+                                    }
+                                    Text(url.deletingPathExtension().lastPathComponent.prefix(18)).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    if controller.backgroundMode == .image && controller.backgroundFilePath == url.path { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
+                                }.font(.caption)
+                            }.buttonStyle(.plain).accessibilityLabel("Select photo \(url.lastPathComponent)")
+                            Button { try? controller.removePersonalBackground(url) } label: { Image(systemName: "trash") }
+                                .buttonStyle(.plain).help("Remove Photo")
+                        }
+                    }
+                }
+            } label: {
+                Text("My Photos (\(controller.personalBackgrounds.count))")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            Button("Add Photo") { isImportingBackground = true }
+                .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
             Button("Reset Effects") {
                 controller.backgroundMode = .blur
                 controller.blurPreset = .natural

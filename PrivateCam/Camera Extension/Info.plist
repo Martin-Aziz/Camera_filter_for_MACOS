@@ -5,7 +5,7 @@
   <key>CFBundleIdentifier</key><string>com.martinaziz.privatecam.CameraExtension</string>
   <key>CFBundleName</key><string>CameraExtension</string>
   <key>CFBundlePackageType</key><string>SYSX</string>
-  <key>CFBundleVersion</key><string>13</string>
+  <key>CFBundleVersion</key><string>21</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
 	<key>NSSystemExtensionUsageDescription</key><string>Aurevix Cam installs a virtual camera that publishes safe neutral output until local privacy processing is available.</string>
 	<key>NSCameraUsageDescription</key><string>Aurevix Cam uses camera access for local capture and privacy processing. Unfiltered passthrough is limited to explicit Debug diagnostics.</string>

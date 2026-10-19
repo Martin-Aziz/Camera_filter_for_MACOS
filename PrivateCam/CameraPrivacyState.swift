@@ -33,7 +33,7 @@ enum CameraBlurPreset: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .natural: range = 3...8
         case .soft: range = 8...14
-        case .strong: range = 14...22
+        case .strong: range = 20...34
         case .softBlue: range = 0...0
         }
         return range.lowerBound + (range.upperBound - range.lowerBound) * t
@@ -72,10 +72,20 @@ struct CameraProcessingConfiguration: Equatable {
     mutating func selectBackground(presetID: String, importedFilePath: String = "") {
         backgroundPresetID = presetID
         backgroundFilePath = importedFilePath
-        if presetID == "soft-blue" {
+        switch presetID {
+        case "soft-blue":
             mode = .blur
             blurPreset = .softBlue
-        } else {
+        case "neutral":
+            mode = .solid
+            red = 0.24
+            green = 0.27
+            blue = 0.30
+        case "solid":
+            mode = .solid
+        case "imported":
+            mode = .image
+        default:
             mode = .image
         }
     }
@@ -103,6 +113,14 @@ struct CameraProcessingConfiguration: Equatable {
             mode = .blur
             preset = .softBlue
             backgroundPresetID = "soft-blue"
+            backgroundFilePath = ""
+        }
+        if mode == .solid {
+            if backgroundPresetID != "neutral" && backgroundPresetID != "solid" {
+                let isNeutral = abs(red - 0.24) < 0.000001
+                    && abs(green - 0.27) < 0.000001 && abs(blue - 0.30) < 0.000001
+                backgroundPresetID = isNeutral ? "neutral" : "solid"
+            }
             backgroundFilePath = ""
         }
         return Self(mode: mode, red: min(max(red, 0), 1), green: min(max(green, 0), 1),

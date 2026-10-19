@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000013 /* SkinRefinementConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* SkinRefinementConfiguration.swift */; };
 		A10000000000000000000014 /* SkinRefinementConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* SkinRefinementConfiguration.swift */; };
+		A10000000000000000000015 /* CameraOperationalState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* CameraOperationalState.swift */; };
 		A10000000000000000000001 /* AppMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* AppMain.swift */; };
 		A10000000000000000000002 /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* CameraController.swift */; };
 		A10000000000000000000003 /* com.martinaziz.privatecam.CameraExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* com.martinaziz.privatecam.CameraExtension.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
@@ -46,6 +47,7 @@
 
 /* Begin PBXFileReference section */
 		A20000000000000000000014 /* SkinRefinementConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Prototype/Segmentation/Sources/PrivateCamSegmentation/SkinRefinementConfiguration.swift; sourceTree = "<group>"; };
+		A20000000000000000000015 /* CameraOperationalState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraOperationalState.swift; sourceTree = "<group>"; };
 		A20000000000000000000001 /* AppMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMain.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* Aurevix Cam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Aurevix Cam.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -93,6 +95,7 @@
 			children = (
 				A20000000000000000000001 /* AppMain.swift */,
 				A20000000000000000000002 /* CameraController.swift */,
+				A20000000000000000000015 /* CameraOperationalState.swift */,
 				A20000000000000000000007 /* App.entitlements */,
 				A80000000000000000000004 /* Camera Extension */,
 				A20000000000000000000008 /* Extension.entitlements */,
@@ -219,6 +222,7 @@
 			files = (
 				A10000000000000000000001 /* AppMain.swift in Sources */,
 				A10000000000000000000002 /* CameraController.swift in Sources */,
+				A10000000000000000000015 /* CameraOperationalState.swift in Sources */,
 				A10000000000000000000006 /* CameraPrivacyState.swift in Sources */,
 				A10000000000000000000013 /* SkinRefinementConfiguration.swift in Sources */,
 			);
@@ -261,7 +265,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Aurevix Cam";
 				INFOPLIST_KEY_CFBundleName = "Aurevix Cam";
 				INFOPLIST_KEY_CFBundleShortVersionString = 1.0;
-				INFOPLIST_KEY_CFBundleVersion = 14;
+				INFOPLIST_KEY_CFBundleVersion = 21;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Aurevix Cam uses camera access for local capture and privacy processing. Unfiltered passthrough is limited to explicit Debug diagnostics.";
 				INFOPLIST_KEY_NSSystemExtensionUsageDescription = "Aurevix Cam installs a virtual camera that publishes safe neutral output until local privacy processing is available.";
@@ -269,7 +273,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.martinaziz.privatecam;
 				PRODUCT_NAME = "Aurevix Cam";
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 21;
 				MARKETING_VERSION = 1.0;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
@@ -290,7 +294,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Aurevix Cam";
 				INFOPLIST_KEY_CFBundleName = "Aurevix Cam";
 				INFOPLIST_KEY_CFBundleShortVersionString = 1.0;
-				INFOPLIST_KEY_CFBundleVersion = 14;
+				INFOPLIST_KEY_CFBundleVersion = 21;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Aurevix Cam uses camera access for local capture and privacy processing. Unfiltered passthrough is limited to explicit Debug diagnostics.";
 				INFOPLIST_KEY_NSSystemExtensionUsageDescription = "Aurevix Cam installs a virtual camera that publishes safe neutral output until local privacy processing is available.";
@@ -298,7 +302,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.martinaziz.privatecam;
 				PRODUCT_NAME = "Aurevix Cam";
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 21;
 				MARKETING_VERSION = 1.0;
 				SWIFT_VERSION = 5.0;
 			};
@@ -326,10 +330,10 @@
 				INFOPLIST_FILE = "PrivateCam/Camera Extension/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Aurevix Cam Camera";
 				INFOPLIST_KEY_CFBundleShortVersionString = 1.0;
-				INFOPLIST_KEY_CFBundleVersion = 14;
+				INFOPLIST_KEY_CFBundleVersion = 21;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 21;
 				PRODUCT_BUNDLE_IDENTIFIER = com.martinaziz.privatecam.CameraExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -361,10 +365,10 @@
 				INFOPLIST_FILE = "PrivateCam/Camera Extension/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "Aurevix Cam Camera";
 				INFOPLIST_KEY_CFBundleShortVersionString = 1.0;
-				INFOPLIST_KEY_CFBundleVersion = 14;
+				INFOPLIST_KEY_CFBundleVersion = 21;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 21;
 				PRODUCT_BUNDLE_IDENTIFIER = com.martinaziz.privatecam.CameraExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

@@ -4,11 +4,67 @@ import ImageIO
 import Vision
 import Foundation
 public enum NaturalSkinRetouch {
-    /// Returns the foreground with low-strength skin-only smoothing. Eye, brow,
-    /// lip and contour landmark regions are excluded from the mask.
+    /// Deterministic fault hook for offline verification of mask-allocation failure.
+    /// Production callers should use `apply` and `diagnosticMask`.
+    public static func diagnosticMask(for image: CIImage, intensity: Double,
+                                      failGrayscaleContextAllocation: Bool) -> CIImage? {
+        makeMask(for: image, intensity: intensity,
+                 failGrayscaleContextAllocation: failGrayscaleContextAllocation)
+    }
+
+    /// Returns a grayscale diagnostic mask with feature exclusions and feathered face boundaries.
+    /// The returned mask uses the same single, continuous strength mapping as `apply`.
+    public static func diagnosticMask(for image: CIImage, intensity: Double) -> CIImage? {
+        makeMask(for: image, intensity: intensity)
+    }
+
+    /// Smooths facial skin with Core Image noise reduction, then blends that result
+    /// through one strength-weighted, feathered skin mask. Landmark regions for
+    /// eyes, brows, lips and nose remain protected.
     public static func apply(to image: CIImage, intensity: Double) -> CIImage {
+        apply(to: image, intensity: intensity, noiseLevel: 0.06, sharpness: 0.82,
+              blendScale: blendScale(for: min(max(intensity, 0), 0.4)))
+    }
+
+    /// Offline appearance calibration entry point. This keeps noise reduction
+    /// and the final mask blend independently adjustable during evaluation.
+    public static func applyForCalibration(to image: CIImage, intensity: Double,
+                                           noiseLevel: Double, sharpness: Double,
+                                           blendScale: Double,
+                                           failGrayscaleContextAllocation: Bool = false) -> CIImage {
+        apply(to: image, intensity: intensity, noiseLevel: noiseLevel,
+              sharpness: sharpness, blendScale: blendScale,
+              failGrayscaleContextAllocation: failGrayscaleContextAllocation)
+    }
+
+    private static func apply(to image: CIImage, intensity: Double, noiseLevel: Double,
+                              sharpness: Double, blendScale: Double,
+                              failGrayscaleContextAllocation: Bool = false) -> CIImage {
         let strength = min(max(intensity, 0), 0.4)
         guard strength > 0, image.extent.width > 0, image.extent.height > 0 else { return image }
+        guard let mask = makeMask(for: image, intensity: strength,
+                                  failGrayscaleContextAllocation: failGrayscaleContextAllocation) else { return image }
+        let smoothed = image.applyingFilter("CINoiseReduction", parameters: [
+            "inputNoiseLevel": min(max(noiseLevel, 0), 0.1),
+            "inputSharpness": min(max(sharpness, 0), 1)
+        ]).cropped(to: image.extent)
+        let scaledMask = mask.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: blendScale, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: blendScale, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: blendScale, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+        ]).cropped(to: image.extent)
+        return smoothed.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: image,
+            kCIInputMaskImageKey: scaledMask
+        ]).cropped(to: image.extent)
+    }
+
+    private static func makeMask(for image: CIImage, intensity: Double,
+                                 failGrayscaleContextAllocation: Bool = false) -> CIImage? {
+        let strength = min(max(intensity, 0), 0.4)
+        guard strength > 0, image.extent.width > 0, image.extent.height > 0 else { return nil }
         let request = VNDetectFaceLandmarksRequest()
         request.revision = VNDetectFaceLandmarksRequestRevision3
         let analysisScale = min(1, 320 / max(image.extent.width, image.extent.height))
@@ -17,19 +73,21 @@ public enum NaturalSkinRetouch {
             : image
         do {
             try VNImageRequestHandler(ciImage: analysisImage, options: [:]).perform([request])
-        } catch { return image }
-        guard let faces = request.results, !faces.isEmpty else { return image }
+        } catch { return nil }
+        guard let faces = request.results, !faces.isEmpty else { return nil }
         let extent = image.extent.integral
         let width = Int(extent.width), height = Int(extent.height)
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-            bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return image }
+        guard !failGrayscaleContextAllocation,
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
         context.setFillColor(gray: 0, alpha: 1)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let opacity = maskOpacity(for: strength)
         for face in faces {
             let box = face.boundingBox
             let rect = CGRect(x: box.minX * extent.width, y: box.minY * extent.height,
                               width: box.width * extent.width, height: box.height * extent.height)
-            context.setFillColor(gray: CGFloat(strength), alpha: 1)
+            context.setFillColor(gray: CGFloat(opacity), alpha: 1)
             if let contour = face.landmarks?.faceContour, contour.pointCount > 2 {
                 let path = landmarkPath(contour, face: face, extent: extent)
                 context.addPath(path); context.fillPath()
@@ -44,14 +102,26 @@ public enum NaturalSkinRetouch {
                 context.addPath(path); context.fillPath()
             }
         }
-        guard let maskCG = context.makeImage() else { return image }
+        guard let maskCG = context.makeImage() else { return nil }
         let mask = CIImage(cgImage: maskCG).transformed(by: CGAffineTransform(translationX: extent.minX, y: extent.minY))
-        let radius = 0.8 + strength * 2.5
-        let softened = image.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius]).cropped(to: extent)
-        return softened.applyingFilter("CIBlendWithMask", parameters: [
-            kCIInputBackgroundImageKey: image,
-            kCIInputMaskImageKey: mask
-        ]).cropped(to: extent)
+        // Feather only the geometric mask edge. Filter strength is not used to
+        // shrink a blur radius, avoiding the old double attenuation.
+        return mask.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.25])
+            .cropped(to: extent)
+    }
+
+    private static func maskOpacity(for strength: Double) -> Double {
+        let t = min(max(strength, 0) / 0.4, 1)
+        guard t > 0 else { return 0 }
+        // Smooth monotonic response gives the Subtle preset a perceptible mix
+        // while retaining a bounded maximum at Custom 0.40.
+        return 0.62 * (1 - exp(-1.3 * t)) / (1 - exp(-1.3))
+    }
+
+    private static func blendScale(for strength: Double) -> Double {
+        let progress = min(max((strength - 0.16) / (0.30 - 0.16), 0), 1)
+        return 1.0 + 0.08 * progress
     }
 
     private static func landmarkPath(_ region: VNFaceLandmarkRegion2D, face: VNFaceObservation, extent: CGRect) -> CGPath {
@@ -109,13 +179,44 @@ public struct RealtimeBackgroundProcessingResult {
     public let compositingMilliseconds: Double
     public let usedNeutralFallback: Bool
     public let failureReason: String?
+    public let processingDiagnostics: String?
+}
+
+public struct PersonSegmentationMaskDiagnostic {
+    public let alignedImage: CIImage
+    public let sourceExtent: CGRect
+    public let transform: CGAffineTransform
 }
 
 public enum BackgroundProcessingFault: Equatable {
     case none
     case visionFailure
+    case noMask
     case invalidMaskDimensions
     case compositingFailure
+}
+
+/// Normalizes arbitrary Vision mask extents and maps them to the destination
+/// frame. Vision may return a reduced-resolution mask (or a non-zero CI extent).
+enum SegmentationMaskGeometry {
+    static func align(_ mask: CIImage, to destination: CGRect) -> (image: CIImage, transform: CGAffineTransform)? {
+        let source = mask.extent
+        guard source.width > 0, source.height > 0, destination.width > 0, destination.height > 0 else { return nil }
+        let sourceAspect = source.width / source.height
+        let destinationAspect = destination.width / destination.height
+        // Vision can return a model-grid mask (for example 256×192) whose
+        // aspect differs from a 16:9 camera frame. Map the full model extent
+        // independently in X and Y; only reject geometry outside safe bounds.
+        guard sourceAspect.isFinite, destinationAspect.isFinite,
+              sourceAspect >= 0.25, sourceAspect <= 4,
+              destinationAspect >= 0.25, destinationAspect <= 4 else { return nil }
+        let normalize = CGAffineTransform(translationX: -source.minX, y: -source.minY)
+        let scale = CGAffineTransform(scaleX: destination.width / source.width,
+                                      y: destination.height / source.height)
+        let translate = CGAffineTransform(translationX: destination.minX, y: destination.minY)
+        let transform = normalize.concatenating(scale).concatenating(translate)
+        return (mask.transformed(by: transform).cropped(to: destination), transform)
+    }
 }
 
 /// Offline prototype. A source frame is never returned directly: every success
@@ -136,6 +237,23 @@ public final class BackgroundReplacementProcessor {
     // just the selected plate so switching presets also bounds memory use.
     private var cachedPhotoKey: String?
     private var cachedPhotoBackground: CIImage?
+
+    /// Offline diagnostic helper for visual mask-alignment audits. Production
+    /// frame processing continues to use its existing single Vision request.
+    public static func diagnosticPersonMask(for source: CVPixelBuffer, quality: SegmentationQuality) -> PersonSegmentationMaskDiagnostic? {
+        let request = VNGeneratePersonSegmentationRequest()
+        request.qualityLevel = quality.visionValue
+        request.outputPixelFormat = kCVPixelFormatType_OneComponent8
+        do {
+            try VNImageRequestHandler(cvPixelBuffer: source, orientation: .up, options: [:]).perform([request])
+        } catch { return nil }
+        guard let buffer = request.results?.first?.pixelBuffer else { return nil }
+        let extent = CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(source), height: CVPixelBufferGetHeight(source))
+        let mask = CIImage(cvPixelBuffer: buffer)
+        guard let alignment = SegmentationMaskGeometry.align(mask, to: extent) else { return nil }
+        return PersonSegmentationMaskDiagnostic(alignedImage: alignment.image, sourceExtent: mask.extent,
+                                                transform: alignment.transform)
+    }
 
     public init(quality: SegmentationQuality,
                 maskPixelFormat requestedMaskPixelFormat: OSType = kCVPixelFormatType_OneComponent8,
@@ -258,11 +376,24 @@ public final class BackgroundReplacementProcessor {
         let expectedHeight = (poolAttributes[kCVPixelBufferHeightKey] as? NSNumber)?.intValue ?? 720
         let expectedFormat = (poolAttributes[kCVPixelBufferPixelFormatTypeKey] as? NSNumber)?.uint32Value
             ?? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-        guard width == expectedWidth, height == expectedHeight,
-              width.isMultiple(of: 2), height.isMultiple(of: 2),
-              sourceFormat == expectedFormat,
-              sourceFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-                || sourceFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange else {
+        let isNV12 = sourceFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            || sourceFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        let isBGRA = sourceFormat == kCVPixelFormatType_32BGRA
+        let validLayout: Bool
+        if isNV12 {
+            validLayout = width.isMultiple(of: 2) && height.isMultiple(of: 2)
+                && CVPixelBufferGetPlaneCount(source) == 2
+                && CVPixelBufferGetWidthOfPlane(source, 0) == width
+                && CVPixelBufferGetHeightOfPlane(source, 0) == height
+                && CVPixelBufferGetWidthOfPlane(source, 1) == width / 2
+                && CVPixelBufferGetHeightOfPlane(source, 1) == height / 2
+                && CVPixelBufferGetBytesPerRowOfPlane(source, 0) >= width
+                && CVPixelBufferGetBytesPerRowOfPlane(source, 1) >= width
+        } else if isBGRA {
+            validLayout = CVPixelBufferGetPlaneCount(source) == 0
+                && CVPixelBufferGetBytesPerRow(source) >= width * 4
+        } else { validLayout = false }
+        guard width == expectedWidth, height == expectedHeight, sourceFormat == expectedFormat, validLayout else {
             return pixelBufferFallback(pool: outputPool, width: expectedWidth, height: expectedHeight,
                                        format: expectedFormat, reason: "source dimensions/format do not match the advertised output")
         }
@@ -270,34 +401,48 @@ public final class BackgroundReplacementProcessor {
         let extent = CGRect(x: 0, y: 0, width: width, height: height)
         let segmentationStart = DispatchTime.now().uptimeNanoseconds
         let mask: CIImage
+        var maskDiagnostics = "mask=unavailable"
         do {
             guard fault != .visionFailure else { throw ProcessingError.injected("Vision") }
+            guard fault != .noMask else { throw ProcessingError.noMask }
             let handler = VNImageRequestHandler(cvPixelBuffer: source, orientation: .up, options: [:])
             try handler.perform([request])
             guard let observation = request.results?.first else { throw ProcessingError.noMask }
             let maskBuffer = observation.pixelBuffer
             let maskWidth = CVPixelBufferGetWidth(maskBuffer)
             let maskHeight = CVPixelBufferGetHeight(maskBuffer)
+            let maskFormat = CVPixelBufferGetPixelFormatType(maskBuffer)
+            let maskImage = CIImage(cvPixelBuffer: maskBuffer)
+            let sourceLayout: String
+            if CVPixelBufferGetPlaneCount(source) == 2 {
+                sourceLayout = "Y=\(CVPixelBufferGetWidthOfPlane(source,0))x\(CVPixelBufferGetHeightOfPlane(source,0)) stride=\(CVPixelBufferGetBytesPerRowOfPlane(source,0));UV=\(CVPixelBufferGetWidthOfPlane(source,1))x\(CVPixelBufferGetHeightOfPlane(source,1)) stride=\(CVPixelBufferGetBytesPerRowOfPlane(source,1))"
+            } else {
+                sourceLayout = "planes=\(CVPixelBufferGetPlaneCount(source)) stride=\(CVPixelBufferGetBytesPerRow(source))"
+            }
+            maskDiagnostics = "source=\(width)x\(height) format=0x\(String(sourceFormat, radix: 16)) layout={\(sourceLayout)} expectedOutput=\(expectedWidth)x\(expectedHeight) mask=\(maskWidth)x\(maskHeight) format=0x\(String(maskFormat, radix: 16)) extent=\(maskImage.extent) quality=\(quality.rawValue) revision=\(request.revision) orientation=up cropRect=full-frame"
             guard fault != .invalidMaskDimensions,
                   maskWidth > 0, maskHeight > 0,
-                  maskWidth <= width, maskHeight <= height else {
+                  maskImage.extent.width > 0, maskImage.extent.height > 0 else {
                 throw ProcessingError.invalidMask
             }
-            mask = CIImage(cvPixelBuffer: maskBuffer)
+            mask = maskImage
         } catch {
             return pixelBufferFallback(pool: outputPool, width: width, height: height, format: sourceFormat,
                                        segmentationMilliseconds: elapsedMilliseconds(since: segmentationStart),
-                                       reason: "segmentation failed: \(error.localizedDescription)")
+                                       reason: "segmentation failed: \(error.localizedDescription); \(maskDiagnostics)")
         }
         let segmentationMilliseconds = elapsedMilliseconds(since: segmentationStart)
         let compositingStart = DispatchTime.now().uptimeNanoseconds
         let sourceImage = CIImage(cvPixelBuffer: source)
         let foregroundImage = NaturalSkinRetouch.apply(to: sourceImage, intensity: skinRefinementIntensity)
         // Preserve the matte's soft alpha and remove only subpixel stair steps.
-        let scaledMask = mask.transformed(by: CGAffineTransform(
-            scaleX: extent.width / mask.extent.width,
-            y: extent.height / mask.extent.height
-        )).cropped(to: extent)
+        guard let alignment = SegmentationMaskGeometry.align(mask, to: extent) else {
+            return pixelBufferFallback(pool: outputPool, width: width, height: height, format: sourceFormat,
+                segmentationMilliseconds: segmentationMilliseconds,
+                compositingMilliseconds: elapsedMilliseconds(since: compositingStart),
+                reason: "invalid mask aspect ratio or extent; \(maskDiagnostics)")
+        }
+        let scaledMask = alignment.image
         let refinedMask = maskFeatherRadius > 0
             ? scaledMask.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: maskFeatherRadius]).cropped(to: extent)
             : scaledMask
@@ -338,7 +483,8 @@ public final class BackgroundReplacementProcessor {
             segmentationMilliseconds: segmentationMilliseconds,
             compositingMilliseconds: elapsedMilliseconds(since: compositingStart),
             usedNeutralFallback: false,
-            failureReason: nil
+            failureReason: nil,
+            processingDiagnostics: "\(maskDiagnostics) transform=\(alignment.transform) destination=\(extent)"
         )
     }
 
@@ -462,7 +608,8 @@ public final class BackgroundReplacementProcessor {
                 segmentationMilliseconds: segmentationMilliseconds,
                 compositingMilliseconds: compositingMilliseconds,
                 usedNeutralFallback: true,
-                failureReason: "\(reason); neutral pool allocation failed"
+                failureReason: "\(reason); neutral pool allocation failed",
+                processingDiagnostics: nil
             )
         }
         let extent = CGRect(x: 0, y: 0, width: width, height: height)
@@ -473,7 +620,8 @@ public final class BackgroundReplacementProcessor {
             segmentationMilliseconds: segmentationMilliseconds,
             compositingMilliseconds: compositingMilliseconds,
             usedNeutralFallback: true,
-            failureReason: reason
+            failureReason: reason,
+            processingDiagnostics: nil
         )
     }
 

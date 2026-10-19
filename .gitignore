@@ -44,3 +44,12 @@ docs/gates/evidence/
 docs/gates/Archive.zip
 PRIVATECAM_CURRENT_STATE_AUDIT_EVIDENCE.zip
 PRIVATECAM_CURRENT_STATE_AUDIT_EVIDENCE.zip.sha256
+# Local build and audit artifacts
+/artifacts/
+/default.profraw
+/:-
+/*.zip
+/*.zip.sha256
+/docs/gates/Archive.zip
+/build/
+/Prototype/Segmentation/.build/

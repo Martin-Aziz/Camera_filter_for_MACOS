@@ -88,7 +88,9 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private var lastLiveMotionMetricsWriteUptime: UInt64 = 0
     private var activeSourceMode = "neutralFallback"
     private var captureInterrupted = false
-    private let backgroundProcessor = BackgroundReplacementProcessor(quality: .balanced, maskFeatherRadius: 0.5)
+    // Keep live segmentation inside the stream's 100 ms publication freshness
+    // budget on ordinary webcam input; balanced quality regularly exceeded it.
+    private let backgroundProcessor = BackgroundReplacementProcessor(quality: .fast, maskFeatherRadius: 1.25)
     private var processingSegmentationMs: [Double] = []
     private var processingCompositeMs: [Double] = []
     private var processingTotalMs: [Double] = []

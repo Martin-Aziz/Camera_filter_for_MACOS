@@ -16,6 +16,8 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     @Published var isCapturing = false
     @Published var isStarting = false
     @Published var isDeviceAvailable = false
+    @Published private(set) var discoveryComplete = false
+    @Published private(set) var operationalError: String?
     @Published var isInterrupted = false
     @Published private(set) var captureRequested = false
     @Published var backgroundMode = CameraBackgroundMode.solid { didSet { persistProcessingConfiguration() } }
@@ -68,6 +70,18 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     private var presentationGapsOver50ms = 0
     private var didLogCaptureDimensions = false
     private var isRestoringConfiguration = true
+
+    var operationalState: CameraOperationalState {
+        let confirmedProcessing = processingStatus.localizedCaseInsensitiveContains("processing active")
+        return CameraOperationalState.resolve(
+            discoveryComplete: discoveryComplete,
+            matchingCameraAvailable: isDeviceAvailable,
+            previewStarting: isStarting,
+            previewRunning: isCapturing,
+            processingConfirmed: confirmedProcessing,
+            errorMessage: operationalError
+        )
+    }
     private var perSecondFrames: [Int] = []
     private var currentSecond = 0
     private var currentSecondFrames = 0
@@ -159,6 +173,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
             return
         }
         let devices = discoveredDevices()
+        discoveryComplete = true
         deviceList = devices.map { "\($0.localizedName) — \($0.uniqueID)" }.joined(separator: "\n")
         let camera = devices.first(where: { $0.uniqueID == targetDeviceID })
         let wasAvailable = isDeviceAvailable
@@ -290,6 +305,12 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         applyProcessingConfiguration(config)
     }
 
+    func selectSolidBackground() {
+        var config = currentProcessingConfiguration()
+        config.selectBackground(presetID: "solid")
+        applyProcessingConfiguration(config)
+    }
+
     func selectImportedBackground() {
         guard !importedBackgroundPath.isEmpty, FileManager.default.fileExists(atPath: importedBackgroundPath) else { return }
         var config = currentProcessingConfiguration()
@@ -396,9 +417,12 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     }
 
     func setBackgroundColor(red: Double, green: Double, blue: Double) {
-        backgroundRed = red
-        backgroundGreen = green
-        backgroundBlue = blue
+        var config = currentProcessingConfiguration()
+        config.red = red
+        config.green = green
+        config.blue = blue
+        if config.mode == .solid { config.backgroundPresetID = "solid" }
+        applyProcessingConfiguration(config)
     }
 
     private func currentProcessingConfiguration() -> CameraProcessingConfiguration {
@@ -467,6 +491,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     }
 
     private func beginCaptureIntent() {
+        operationalError = nil
         captureRequested = true
         captureRequestGeneration &+= 1
         retryScheduleGeneration &+= 1
@@ -558,6 +583,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
                 self.isStarting = false
                 self.isCapturing = true
                 self.isDeviceAvailable = true
+                self.operationalError = nil
                 self.retryAttempts = 0
                 self.status = "Aurevix Cam preview is running. Processing status is read from the extension."
                 self.refreshEngineStatus()
@@ -652,6 +678,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         guard captureRequested, captureRequestGeneration == requestID else { return }
         guard retryAttempts < retryDelays.count else {
             isStarting = false
+            operationalError = detail
             status = "Preview start stopped after 3 bounded retries: \(detail). Press Start to try again."
             logger.error("capture retry limit reached detail=\(detail, privacy: .public)")
             return

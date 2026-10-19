@@ -4,7 +4,7 @@ Aurevix Cam is a native macOS virtual camera with local Vision and Core Image ba
 
 ## Current source state
 
-The current source candidate is build 16. It has been built and signed but has not been installed; the installed app and active system extension remain build 14. It includes user-imported backgrounds and the App Sandbox read-only entitlement required to open user-selected image files. Camera UUID, stream UUID, bundle identifiers, Team ID, App Group, and existing preference keys remain stable. Opening the app does not start the camera.
+The current source candidate is build 21. The recorded installation evidence shows the installed app at build 14 and the active system extension at build 21; the current source candidate is not established as installed. It includes user-imported backgrounds and the App Sandbox read-only entitlement required to open user-selected image files. Camera UUID, stream UUID, bundle identifiers, Team ID, App Group, and existing preference keys remain stable. Opening the app does not start the camera.
 
 Open `PrivateCam.xcodeproj`, select the `PrivateCam` scheme, and build Debug or Release. The scheme and internal product target retain their historical identifier for compatibility.
 
