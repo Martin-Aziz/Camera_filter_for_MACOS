@@ -9,16 +9,19 @@ final class SegmentationTests: XCTestCase {
     func testSkinPresetsIntensityBoundsAndPersistence() {
         XCTAssertEqual(SkinRefinementConfiguration(preset: .off).effectiveIntensity, 0)
         XCTAssertEqual(SkinRefinementConfiguration(preset: .subtle).effectiveIntensity, 0.16, accuracy: 0.001)
-        XCTAssertEqual(SkinRefinementConfiguration(preset: .refined).effectiveIntensity, 0.30, accuracy: 0.001)
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .refined).effectiveIntensity, 0.36, accuracy: 0.001)
         XCTAssertEqual(SkinRefinementConfiguration(preset: .custom, intensity: 9).effectiveIntensity, 0.4)
         XCTAssertEqual(SkinRefinementConfiguration(preset: .custom, intensity: -2).effectiveIntensity, 0)
         let suite = "AurevixCamTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        SkinRefinementConfiguration(preset: .refined, intensity: 0.73).write(to: defaults)
+        SkinRefinementConfiguration(preset: .refined, intensity: 0.73,
+                                    lightToneEnabled: true, lightToneIntensity: 2).write(to: defaults)
         let restored = SkinRefinementConfiguration.read(from: defaults)
         XCTAssertEqual(restored.preset, .refined)
         XCTAssertEqual(restored.intensity, 0.4)
+        XCTAssertTrue(restored.lightToneEnabled)
+        XCTAssertEqual(restored.lightToneIntensity, 1, accuracy: 0.001)
         XCTAssertEqual(SkinRefinementConfiguration.read(from: UserDefaults(suiteName: suite)).preset, .refined)
     }
 

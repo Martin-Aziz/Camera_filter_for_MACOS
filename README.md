@@ -4,9 +4,13 @@ Aurevix Cam is a native macOS virtual camera with local Vision and Core Image ba
 
 ## Current source state
 
-The current source and installed app are build 23. The embedded CoreMediaIO camera extension is build 23 and reports activated and enabled. Build 22's extension and older builds 19, 20, and 21 remain terminated while waiting for reboot cleanup. Build 23 adds the menu-bar-only app setting and a compact menu with preview, background, beauty preset, photo import, and Studio controls. It retains build 22's background and camera processing behavior. Camera UUID, stream UUID, bundle identifiers, Team ID, App Group, and existing preference keys remain stable. Opening the app does not start camera capture.
+The current source is build 24. It includes balanced Vision segmentation, temporally stabilized and slightly contracted mattes, face-local skin refinement, and optional Light & tone controls. Build 23 was confirmed discoverable by AVFoundation after reboot. Camera UUID, stream UUID, bundle identifiers, Team ID, App Group, and established preference keys remain stable. Opening the app does not start camera capture.
 
 Open `PrivateCam.xcodeproj`, select the `PrivateCam` scheme, and build Debug or Release. The scheme and internal product target retain their historical identifier for compatibility.
+
+### Install and activate
+
+Before every installation, run `systemextensionsctl list`. If any older Aurevix Cam extension version is waiting for removal after reboot, stop the install and restart macOS first. After reboot, verify only the intended extension version remains active. Build Release, copy the signed `PrivateCam.app` to `/Applications/Aurevix Cam.app`, and launch that copy; system camera extensions must be activated from the installed app. Use the in-app Activate Camera Extension control if macOS has not activated it, then approve it in System Settings → General → Login Items & Extensions → Camera Extensions if prompted. Confirm the expected version with `systemextensionsctl list`, discover `Aurevix Cam` in AVFoundation, and check that a live processed frame is being published before relying on it in a call app. A listed device may still be publishing neutral fallback frames if physical camera capture has not delivered frames.
 
 ## Backgrounds
 

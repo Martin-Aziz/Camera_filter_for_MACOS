@@ -33,6 +33,8 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     @Published private(set) var personalBackgrounds: [URL] = []
     @Published var skinPreset: SkinRefinementPreset = .off { didSet { persistSkinConfiguration() } }
     @Published var skinIntensity: Double = 0.2 { didSet { persistSkinConfiguration() } }
+    @Published var lightToneEnabled = false { didSet { persistSkinConfiguration() } }
+    @Published var lightToneIntensity = 0.35 { didSet { persistSkinConfiguration() } }
     @Published var processingStatus = "Processing status unavailable. Start a virtual-camera client to confirm."
     @Published var motionStatistics = "Unique processed-video FPS: unavailable (no active stream)"
     @Published var streamHealth = "Stream health: waiting for receiver data."
@@ -111,6 +113,8 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         let skin = SkinRefinementConfiguration.read()
         skinPreset = skin.preset
         skinIntensity = skin.intensity
+        lightToneEnabled = skin.lightToneEnabled
+        lightToneIntensity = skin.lightToneIntensity
         refreshPersonalBackgrounds()
         launchAtLoginEnabled = UserDefaults.standard.bool(forKey: CameraProcessingConfiguration.launchAtLoginKey)
         isRestoringConfiguration = false
@@ -360,7 +364,9 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
 
     private func persistSkinConfiguration() {
         guard !isRestoringConfiguration else { return }
-        SkinRefinementConfiguration(preset: skinPreset, intensity: min(max(skinIntensity, 0), 0.4)).write()
+        SkinRefinementConfiguration(preset: skinPreset, intensity: min(max(skinIntensity, 0), 0.4),
+                                    lightToneEnabled: lightToneEnabled,
+                                    lightToneIntensity: lightToneIntensity).write()
     }
 
     func importBackground(from sourceURL: URL) throws {

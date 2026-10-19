@@ -249,6 +249,14 @@ struct ContentView: View {
                 HStack { Text("Smoothing"); Spacer(); Text("\(Int(controller.skinIntensity / 0.4 * 100))%").monospacedDigit().foregroundStyle(.secondary) }.font(.caption)
                 Slider(value: $controller.skinIntensity, in: 0...0.4).accessibilityLabel("Custom skin smoothing intensity")
             }
+            Toggle("Light & tone", isOn: $controller.lightToneEnabled)
+                .accessibilityLabel("Light and tone correction")
+            if controller.lightToneEnabled {
+                HStack { Text("Intensity"); Spacer(); Text("\(Int(controller.lightToneIntensity * 100))%")
+                    .monospacedDigit().foregroundStyle(.secondary) }.font(.caption)
+                Slider(value: $controller.lightToneIntensity, in: 0...1)
+                    .accessibilityLabel("Light and tone intensity")
+            }
             Divider()
             Text("BACKGROUND FILTERS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             VStack(spacing: 7) {

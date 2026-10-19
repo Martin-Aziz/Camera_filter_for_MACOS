@@ -3,6 +3,9 @@ import CoreVideo
 import ImageIO
 import Vision
 import Foundation
+import os
+
+private let segmentationLogger = Logger(subsystem: "com.martinaziz.privatecam", category: "Segmentation")
 public enum NaturalSkinRetouch {
     /// Deterministic fault hook for offline verification of mask-allocation failure.
     /// Production callers should use `apply` and `diagnosticMask`.
@@ -24,6 +27,29 @@ public enum NaturalSkinRetouch {
     public static func apply(to image: CIImage, intensity: Double) -> CIImage {
         apply(to: image, intensity: intensity, noiseLevel: 0.06, sharpness: 0.82,
               blendScale: blendScale(for: min(max(intensity, 0), 0.4)))
+    }
+
+    /// Applies subtle face-local exposure, warmth, and shadow lift. Facial skin
+    /// landmarks provide the mask; eyes, brows, lips and nose stay excluded.
+    public static func applyLightAndTone(to image: CIImage, intensity: Double) -> CIImage {
+        let amount = min(max(intensity, 0), 1)
+        guard amount > 0, let mask = makeMask(for: image, intensity: 0.4) else { return image }
+        let adjusted = image.applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: 0.16 * amount])
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.015,
+                kCIInputBrightnessKey: 0.012 * amount, kCIInputContrastKey: 1.0])
+            .applyingFilter("CITemperatureAndTint", parameters: ["inputNeutral": CIVector(x: 6500, y: 0),
+                "inputTargetNeutral": CIVector(x: 6650 + 250 * amount, y: 0)])
+            .cropped(to: image.extent)
+        let toneMask = mask.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0.32, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 0.32, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0.32, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+        ]).cropped(to: image.extent)
+        return adjusted.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: image, kCIInputMaskImageKey: toneMask
+        ]).cropped(to: image.extent)
     }
 
     /// Offline appearance calibration entry point. This keeps noise reduction
@@ -237,6 +263,13 @@ public final class BackgroundReplacementProcessor {
     // just the selected plate so switching presets also bounds memory use.
     private var cachedPhotoKey: String?
     private var cachedPhotoBackground: CIImage?
+    private var previousAlignedMask: CIImage?
+    private var previousMaskUptimeNanoseconds: UInt64?
+    private var timingSamplesMilliseconds: [Double] = []
+    private var timingSegmentationMilliseconds: [Double] = []
+    private var timingCompositingMilliseconds: [Double] = []
+    private var timingReportWritten = false
+    private let timingSampleLimit = 300
 
     /// Offline diagnostic helper for visual mask-alignment audits. Production
     /// frame processing continues to use its existing single Vision request.
@@ -264,6 +297,7 @@ public final class BackgroundReplacementProcessor {
         self.context = context
         self.blurModel = blurModel
         self.maskFeatherRadius = min(max(maskFeatherRadius, 0), 2)
+        self.previousAlignedMask = nil
         self.request = VNGeneratePersonSegmentationRequest()
         request.qualityLevel = quality.visionValue
         let supported: [UInt32]
@@ -366,6 +400,8 @@ public final class BackgroundReplacementProcessor {
         outputPool: CVPixelBufferPool,
         treatment: BackgroundTreatment,
         skinRefinementIntensity: Double = 0,
+        lightToneEnabled: Bool = false,
+        lightToneIntensity: Double = 0.35,
         fault: BackgroundProcessingFault = .none
     ) -> RealtimeBackgroundProcessingResult {
         let width = CVPixelBufferGetWidth(source)
@@ -434,7 +470,10 @@ public final class BackgroundReplacementProcessor {
         let segmentationMilliseconds = elapsedMilliseconds(since: segmentationStart)
         let compositingStart = DispatchTime.now().uptimeNanoseconds
         let sourceImage = CIImage(cvPixelBuffer: source)
-        let foregroundImage = NaturalSkinRetouch.apply(to: sourceImage, intensity: skinRefinementIntensity)
+        var foregroundImage = NaturalSkinRetouch.apply(to: sourceImage, intensity: skinRefinementIntensity)
+        if lightToneEnabled {
+            foregroundImage = NaturalSkinRetouch.applyLightAndTone(to: foregroundImage, intensity: lightToneIntensity)
+        }
         // Preserve the matte's soft alpha and remove only subpixel stair steps.
         guard let alignment = SegmentationMaskGeometry.align(mask, to: extent) else {
             return pixelBufferFallback(pool: outputPool, width: width, height: height, format: sourceFormat,
@@ -442,10 +481,35 @@ public final class BackgroundReplacementProcessor {
                 compositingMilliseconds: elapsedMilliseconds(since: compositingStart),
                 reason: "invalid mask aspect ratio or extent; \(maskDiagnostics)")
         }
-        let scaledMask = alignment.image
+        var scaledMask = alignment.image
+        let nowUptime = DispatchTime.now().uptimeNanoseconds
+        let previousMaskIsContinuous = previousMaskUptimeNanoseconds.map {
+            nowUptime >= $0 && nowUptime - $0 <= 100_000_000
+        } ?? false
+        if previousMaskIsContinuous, let previousAlignedMask {
+            scaledMask = scaledMask.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: 0.6, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: 0.6, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 0.6, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+            ]).applyingFilter("CIAdditionCompositing", parameters: [kCIInputBackgroundImageKey:
+                previousAlignedMask.applyingFilter("CIColorMatrix", parameters: [
+                    "inputRVector": CIVector(x: 0.4, y: 0, z: 0, w: 0),
+                    "inputGVector": CIVector(x: 0, y: 0.4, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: 0.4, w: 0),
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
+                    "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+                ])]).cropped(to: extent)
+        }
+        previousAlignedMask = scaledMask
+        previousMaskUptimeNanoseconds = nowUptime
+        // Contract the matte slightly to suppress background-colored edge halos,
+        // then feather the contracted edge by a subpixel amount.
+        let contractedMask = scaledMask.applyingFilter("CIMorphologyMinimum", parameters: [kCIInputRadiusKey: 0.7]).cropped(to: extent)
         let refinedMask = maskFeatherRadius > 0
-            ? scaledMask.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: maskFeatherRadius]).cropped(to: extent)
-            : scaledMask
+            ? contractedMask.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: min(maskFeatherRadius, 0.8)]).cropped(to: extent)
+            : contractedMask
         let background: CIImage
         switch treatment {
         case .solid(let color):
@@ -478,14 +542,35 @@ public final class BackgroundReplacementProcessor {
                                        reason: "compositing/output allocation failed")
         }
         context.render(composite, to: destination, bounds: extent, colorSpace: CGColorSpaceCreateDeviceRGB())
+        let compositingMilliseconds = elapsedMilliseconds(since: compositingStart)
+        recordTimingSample(segmentationMilliseconds: segmentationMilliseconds,
+                           compositingMilliseconds: compositingMilliseconds, width: width, height: height)
         return RealtimeBackgroundProcessingResult(
             pixelBuffer: destination,
             segmentationMilliseconds: segmentationMilliseconds,
-            compositingMilliseconds: elapsedMilliseconds(since: compositingStart),
+            compositingMilliseconds: compositingMilliseconds,
             usedNeutralFallback: false,
             failureReason: nil,
             processingDiagnostics: "\(maskDiagnostics) transform=\(alignment.transform) destination=\(extent)"
         )
+    }
+
+    private func recordTimingSample(segmentationMilliseconds: Double, compositingMilliseconds: Double,
+                                    width: Int, height: Int) {
+        guard width == 1280, height == 720, timingSamplesMilliseconds.count < timingSampleLimit else { return }
+        timingSamplesMilliseconds.append(segmentationMilliseconds + compositingMilliseconds)
+        timingSegmentationMilliseconds.append(segmentationMilliseconds)
+        timingCompositingMilliseconds.append(compositingMilliseconds)
+        guard timingSamplesMilliseconds.count == timingSampleLimit, !timingReportWritten else { return }
+        timingReportWritten = true
+        let sorted = timingSamplesMilliseconds.sorted()
+        let average = sorted.reduce(0, +) / Double(sorted.count)
+        let p95Index = min(sorted.count - 1, Int(ceil(Double(sorted.count) * 0.95)) - 1)
+        let sortedSegmentation = timingSegmentationMilliseconds.sorted()
+        let segmentationAverage = sortedSegmentation.reduce(0, +) / Double(sortedSegmentation.count)
+        let sortedCompositing = timingCompositingMilliseconds.sorted()
+        let compositingAverage = sortedCompositing.reduce(0, +) / Double(sortedCompositing.count)
+        segmentationLogger.notice("phase3_720p_timing frames=300 total_average_ms=\(average, privacy: .public) total_p95_ms=\(sorted[p95Index], privacy: .public) total_max_ms=\(sorted.last ?? 0, privacy: .public) segmentation_average_ms=\(segmentationAverage, privacy: .public) segmentation_p95_ms=\(sortedSegmentation[p95Index], privacy: .public) segmentation_max_ms=\(sortedSegmentation.last ?? 0, privacy: .public) compositing_average_ms=\(compositingAverage, privacy: .public) compositing_p95_ms=\(sortedCompositing[p95Index], privacy: .public) compositing_max_ms=\(sortedCompositing.last ?? 0, privacy: .public)")
     }
 
     private func blurredBackground(_ source: CIImage, mask: CIImage, extent: CGRect, radius: CGFloat) -> CIImage {

@@ -88,9 +88,7 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private var lastLiveMotionMetricsWriteUptime: UInt64 = 0
     private var activeSourceMode = "neutralFallback"
     private var captureInterrupted = false
-    // Keep live segmentation inside the stream's 100 ms publication freshness
-    // budget on ordinary webcam input; balanced quality regularly exceeded it.
-    private let backgroundProcessor = BackgroundReplacementProcessor(quality: .fast, maskFeatherRadius: 1.25)
+    private let backgroundProcessor = BackgroundReplacementProcessor(quality: .balanced, maskFeatherRadius: 0.7)
     private var processingSegmentationMs: [Double] = []
     private var processingCompositeMs: [Double] = []
     private var processingTotalMs: [Double] = []
@@ -554,7 +552,9 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         onStateQueue { appendBounded(Double(processStart - captureArrivalUptime) / 1_000_000, to: &processingQueueWaitMs) }
         let beauty = SkinRefinementConfiguration.read()
         let result = backgroundProcessor.process(pixelBuffer: source, outputPool: pool, treatment: treatment,
-                                                  skinRefinementIntensity: beauty.effectiveIntensity)
+                                                  skinRefinementIntensity: beauty.effectiveIntensity,
+                                                  lightToneEnabled: beauty.lightToneEnabled,
+                                                  lightToneIntensity: beauty.lightToneIntensity)
 
         // All checks that authorize publication and the send itself run on the
         // stream state queue. The raw capture buffer is never sent.
