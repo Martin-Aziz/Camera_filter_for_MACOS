@@ -42,13 +42,14 @@ private struct MenuBarController: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(nsImage: NSApplication.shared.applicationIconImage)
-                    .resizable().frame(width: 26, height: 26).clipShape(RoundedRectangle(cornerRadius: 6))
-                VStack(alignment: .leading) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
                     Text("Aurevix Cam").font(.headline)
-                    Text(controller.status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Text(controller.isDeviceAvailable ? "Virtual camera available" : "Virtual camera unavailable")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
+                Spacer()
+                Circle().fill(controller.isDeviceAvailable ? Color.green : Color.secondary).frame(width: 8, height: 8)
             }
             Divider()
             Button(controller.isCapturing || controller.isStarting || controller.captureRequested ? "Stop Local Preview" : "Start Local Preview") {
@@ -56,57 +57,54 @@ private struct MenuBarController: View {
             }
             .disabled(!controller.isCapturing && !controller.isStarting && !controller.isDeviceAvailable)
             Menu("Background") {
+                Button("Off / Neutral") { controller.selectBackground("neutral") }
+                Button("Soft Blue") { controller.selectBackground("soft-blue") }
+                Button("Solid Background") { controller.selectSolidBackground() }
+                Divider()
+                Button("Natural Blur") { controller.backgroundMode = .blur; controller.blurPreset = .natural }
+                Button("Soft Blur") { controller.backgroundMode = .blur; controller.blurPreset = .soft }
+                Button("Strong Blur") { controller.backgroundMode = .blur; controller.blurPreset = .strong }
+                if !controller.personalBackgrounds.isEmpty { Divider() }
                 ForEach(controller.personalBackgrounds, id: \.path) { url in
-                    Divider()
                     Button(url.deletingPathExtension().lastPathComponent) { controller.selectPersonalBackground(url) }
                 }
-                Divider()
-                ForEach([CameraBlurPreset.natural, .soft, .strong]) { preset in
-                    Button("\(preset.title) Blur") {
-                        controller.backgroundMode = .blur
-                        controller.blurPreset = preset
+            }
+            Menu("Beauty") {
+                ForEach(SkinRefinementPreset.allCases.filter { $0 != .custom }) { preset in
+                    Button {
+                        controller.skinPreset = preset
+                    } label: {
+                        if controller.skinPreset == preset { Label(preset.title, systemImage: "checkmark") }
+                        else { Text(preset.title) }
                     }
                 }
             }
-            if controller.backgroundMode == .blur && controller.blurPreset != .softBlue {
-                Slider(value: $controller.blurIntensity, in: 0...1) { Text("Blur intensity") }
-                    .accessibilityLabel("Blur intensity")
+            Button("Add Photo…") {
+                let panel = NSOpenPanel()
+                panel.allowedContentTypes = [.image]
+                panel.allowsMultipleSelection = false
+                panel.canChooseDirectories = false
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                do {
+                    try controller.importBackground(from: url)
+                    controller.selectImportedBackground()
+                } catch {
+                    controller.status = "Couldn’t import background: \(error.localizedDescription)"
+                }
             }
-            if controller.backgroundMode == .solid {
-                ColorPicker("Background", selection: Binding(
-                    get: { Color(red: controller.backgroundRed, green: controller.backgroundGreen, blue: controller.backgroundBlue) },
-                    set: { color in
-                        let converted = NSColor(color).usingColorSpace(.deviceRGB) ?? .darkGray
-                        controller.setBackgroundColor(red: converted.redComponent, green: converted.greenComponent, blue: converted.blueComponent)
-                    }
-                ))
-            }
-            Label(controller.processingStatus, systemImage: controller.processingStatus.lowercased().contains("neutral") ? "lock.shield" : "checkmark.shield")
-                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            Text(controller.isDeviceAvailable ? "Virtual camera available" : "Virtual camera unavailable")
-                .font(.caption).foregroundStyle(.secondary)
-            Toggle("Launch at Login", isOn: Binding(
-                get: { controller.launchAtLoginEnabled },
-                set: { controller.setLaunchAtLogin($0) }
-            ))
-            .toggleStyle(.checkbox)
-            .help("Starts Aurevix Cam controls only. It never starts camera capture automatically.")
-            if !controller.loginItemStatus.isEmpty {
-                Text(controller.loginItemStatus).font(.caption2).foregroundStyle(.secondary)
-            }
-            Button("Open Studio") {
+            Button("Open Studio…") {
                 openWindow(id: "studio")
                 NSApp.activate(ignoringOtherApps: true)
             }
                 .keyboardShortcut("o")
-            Button("About Aurevix Cam") { openWindow(id: "credits") }
+            Divider()
             Button("Quit Aurevix Cam") {
                 controller.stopCapture()
                 NSApp.terminate(nil)
             }
         }
-        .padding(14)
-        .frame(width: 280)
+        .padding(12)
+        .frame(width: 300)
     }
 }
 
