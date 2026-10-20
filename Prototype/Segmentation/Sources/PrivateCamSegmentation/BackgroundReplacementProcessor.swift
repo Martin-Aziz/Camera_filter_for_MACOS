@@ -359,6 +359,12 @@ public final class BackgroundReplacementProcessor {
     private var smoothedMaskBuffers: [CVPixelBuffer] = []
     private var smoothedMaskIndex = 0
     private var timingSamples: [ProcessingStageTimings] = []
+    /// True while segmentation runs on every other frame under load.
+    public private(set) var adaptiveSkipActive = false
+    public private(set) var adaptiveCadenceSwitches = 0
+    private var lastFrameSegmented = false
+    private var recentFrameMilliseconds: [Double] = []
+    private let adaptiveWindow = 60
     private let faceQueue = DispatchQueue(label: "com.martinaziz.privatecam.faces", qos: .userInteractive)
 
     /// Written on `faceQueue`, read after the dispatch group wait.
@@ -540,7 +546,15 @@ public final class BackgroundReplacementProcessor {
         let segmentationStart = DispatchTime.now().uptimeNanoseconds
         let mask: CIImage
         var maskDiagnostics = "mask=unavailable"
-        do {
+        // Adaptive cadence: under sustained load, every other frame reuses the
+        // previous smoothed matte instead of running Vision.
+        let reuseMask = adaptiveSkipActive && lastFrameSegmented && fault == .none
+            && previousSmoothedMask != nil
+            && previousMaskUptimeNanoseconds.map { DispatchTime.now().uptimeNanoseconds - $0 <= 100_000_000 } == true
+        if reuseMask, let previousSmoothedMask {
+            mask = previousSmoothedMask
+            maskDiagnostics = "mask=reused cadence=every-other-frame"
+        } else { do {
             guard fault != .visionFailure else { throw ProcessingError.injected("Vision") }
             guard fault != .noMask else { throw ProcessingError.noMask }
             let handler = VNImageRequestHandler(cvPixelBuffer: source, orientation: .up, options: [:])
@@ -568,13 +582,14 @@ public final class BackgroundReplacementProcessor {
             return pixelBufferFallback(pool: outputPool, width: width, height: height, format: sourceFormat,
                                        segmentationMilliseconds: elapsedMilliseconds(since: segmentationStart),
                                        reason: "segmentation failed: \(error.localizedDescription); \(maskDiagnostics)")
-        }
+        } }
+        lastFrameSegmented = !reuseMask
         let segmentationMilliseconds = elapsedMilliseconds(since: segmentationStart)
         let compositingStart = DispatchTime.now().uptimeNanoseconds
 
         // Mask: temporal smoothing and edge refinement run at Vision's mask
         // resolution; only the refined matte is scaled to the frame.
-        guard let alignment = refinedFrameMask(mask, frameExtent: extent) else {
+        guard let alignment = refinedFrameMask(mask, frameExtent: extent, reusingStoredMask: reuseMask) else {
             return pixelBufferFallback(pool: outputPool, width: width, height: height, format: sourceFormat,
                 segmentationMilliseconds: segmentationMilliseconds,
                 compositingMilliseconds: elapsedMilliseconds(since: compositingStart),
@@ -645,6 +660,7 @@ public final class BackgroundReplacementProcessor {
                                             background: backgroundMilliseconds, beauty: beautyMilliseconds,
                                             render: renderMilliseconds)
         recordTimingSample(stages, width: width, height: height)
+        updateAdaptiveCadence(frameMilliseconds: stages.total)
         return RealtimeBackgroundProcessingResult(
             pixelBuffer: destination,
             segmentationMilliseconds: segmentationMilliseconds,
@@ -660,8 +676,8 @@ public final class BackgroundReplacementProcessor {
     /// at mask resolution, then maps it to the frame. The smoothed matte is
     /// materialized into an owned ping-pong buffer: Vision may recycle its
     /// output buffer, and the next frame must not chain onto this frame's graph.
-    private func refinedFrameMask(_ rawMask: CIImage,
-                                  frameExtent: CGRect) -> (image: CIImage, transform: CGAffineTransform)? {
+    private func refinedFrameMask(_ rawMask: CIImage, frameExtent: CGRect,
+                                  reusingStoredMask: Bool = false) -> (image: CIImage, transform: CGAffineTransform)? {
         let source = rawMask.extent
         guard source.width > 0, source.height > 0 else { return nil }
         let maskExtent = CGRect(x: 0, y: 0, width: source.width, height: source.height).integral
@@ -672,14 +688,21 @@ public final class BackgroundReplacementProcessor {
             nowUptime >= $0 && nowUptime - $0 <= 100_000_000
         } ?? false
         var temporal = normalized
+        let stored: CIImage
+        if reusingStoredMask {
+            // Already smoothed and materialized; keep its original timestamp.
+            stored = rawMask
+        } else {
         if previousMaskIsContinuous, let previousSmoothedMask, previousSmoothedMask.extent == maskExtent {
             temporal = Self.scaled(normalized, by: 0.6).applyingFilter("CIAdditionCompositing", parameters: [
                 kCIInputBackgroundImageKey: Self.scaled(previousSmoothedMask, by: 0.4)
             ]).cropped(to: maskExtent)
         }
-        guard let stored = storeSmoothedMask(temporal, extent: maskExtent) else { return nil }
+        guard let materialized = storeSmoothedMask(temporal, extent: maskExtent) else { return nil }
+        stored = materialized
         previousSmoothedMask = stored
         previousMaskUptimeNanoseconds = nowUptime
+        }
         // A soft levels contraction suppresses background-colored edge halos;
         // a half-pixel feather at mask scale removes stair steps.
         let contracted = stored.applyingFilter("CIColorMatrix", parameters: [
@@ -717,6 +740,25 @@ public final class BackgroundReplacementProcessor {
         let target = smoothedMaskBuffers[smoothedMaskIndex]
         context.render(image, to: target, bounds: extent, colorSpace: nil)
         return CIImage(cvPixelBuffer: target, options: [.colorSpace: NSNull()])
+    }
+
+    /// Hysteresis over a rolling 60-frame p95: above 30 ms segment every other
+    /// frame; back to every frame once it falls below 25 ms. The window restarts
+    /// after each switch so the decision uses only frames from the current mode.
+    private func updateAdaptiveCadence(frameMilliseconds: Double) {
+        recentFrameMilliseconds.append(frameMilliseconds)
+        if recentFrameMilliseconds.count > adaptiveWindow { recentFrameMilliseconds.removeFirst() }
+        guard recentFrameMilliseconds.count == adaptiveWindow else { return }
+        let sorted = recentFrameMilliseconds.sorted()
+        let p95 = sorted[min(sorted.count - 1, Int(ceil(Double(sorted.count) * 0.95)) - 1)]
+        let next: Bool
+        if !adaptiveSkipActive && p95 > 30 { next = true }
+        else if adaptiveSkipActive && p95 < 25 { next = false }
+        else { return }
+        adaptiveSkipActive = next
+        adaptiveCadenceSwitches += 1
+        recentFrameMilliseconds.removeAll(keepingCapacity: true)
+        segmentationLogger.notice("adaptive_cadence switch=\(next ? "every-other-frame" : "every-frame", privacy: .public) rolling_p95_ms=\(p95, privacy: .public) switches=\(self.adaptiveCadenceSwitches, privacy: .public)")
     }
 
     private static func scaled(_ mask: CIImage, by weight: CGFloat) -> CIImage {
