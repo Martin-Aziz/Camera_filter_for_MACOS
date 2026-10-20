@@ -47,7 +47,10 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private var pixelBufferAllocationFailures = 0
     private var physicalCamera: AVCaptureDevice?
     private var physicalCameraFormat: AVCaptureDevice.Format?
-    private var capturePixelFormat: OSType = kCVPixelFormatType_32BGRA
+    // The advertised and delivered format is always 420v; AVFoundation converts
+    // from the camera's native range, so the stream format never depends on
+    // whether a camera was discoverable when the extension loaded.
+    private let capturePixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
     // Objects below are owned exclusively by captureControlQueue.
     private var physicalCaptureSession: AVCaptureSession?
     private var physicalCaptureOutput: AVCaptureVideoDataOutput?
@@ -133,35 +136,7 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
                 self.receivePhysicalFrame(frame.sampleBuffer, generation: frame.generation, captureArrivalUptime: frame.captureArrivalUptime)
             }
         }
-        var cameraTypes: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
-        if #available(macOS 14.0, *) { cameraTypes.append(.external) }
-        else { cameraTypes.append(.externalUnknown) }
-        let discovery = AVCaptureDevice.DiscoverySession(
-            deviceTypes: cameraTypes,
-            mediaType: .video,
-            position: .unspecified
-        )
-        let cameraCandidates = discovery.devices
-            .filter { $0.uniqueID != deviceIdentifier.uuidString && $0.isConnected }
-            .sorted { $0.deviceType == .builtInWideAngleCamera && $1.deviceType != .builtInWideAngleCamera }
-        let selectedCameraAndFormat = cameraCandidates.lazy.compactMap { camera in
-            camera.formats.first(where: { format in
-                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                let supports720p30 = dimensions.width == Int32(width) && dimensions.height == Int32(height)
-                    && format.videoSupportedFrameRateRanges.contains { $0.minFrameRate <= 30 && $0.maxFrameRate >= 30 }
-                let pixelFormat = CMFormatDescriptionGetMediaSubType(format.formatDescription)
-                return supports720p30 && (pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-                    || pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
-            }).map { (camera, $0) }
-        }.first
-        if let (camera, format) = selectedCameraAndFormat {
-            physicalCamera = camera
-            physicalCameraFormat = format
-            capturePixelFormat = CMFormatDescriptionGetMediaSubType(format.formatDescription)
-            logger.notice("physical camera candidate name=\(camera.localizedName, privacy: .public) unique_id=\(camera.uniqueID, privacy: .public) format=1280x720 pixel_format=\(self.fourCC(self.capturePixelFormat), privacy: .public) fps=30")
-        } else {
-            logger.error("no physical camera format supports 1280x720 30fps native bi-planar 4:2:0; retaining v3 neutral fallback format")
-        }
+        selectPhysicalCamera()
         device = CMIOExtensionDevice(
             localizedName: "Aurevix Cam",
             deviceID: deviceIdentifier,
@@ -224,6 +199,7 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
             startEngineStatusHeartbeat()
             logger.notice("safe processing stream started; neutral output remains active until a validated composite arrives")
             startNeutralFallbackProducer()
+            if physicalCamera == nil || physicalCameraFormat == nil { selectPhysicalCamera() }
             if physicalCamera != nil, physicalCameraFormat != nil { beginPhysicalCapture() }
             else {
                 updateEngineStatus("Neutral fallback active (physical camera unavailable).")
@@ -333,6 +309,44 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
             self.physicalCaptureOutput = nil
             self.physicalCaptureDelegate = nil
             logger.notice("physical capture stopped generation=\(generation, privacy: .public) reason=\(reason, privacy: .public)")
+        }
+    }
+
+
+    /// Finds a physical camera with a native 720p30 4:2:0 format. At boot the
+    /// built-in camera can be undiscoverable when the extension loads, so this
+    /// also runs again when a client starts streaming.
+    @discardableResult
+    private func selectPhysicalCamera() -> Bool {
+        var cameraTypes: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
+        if #available(macOS 14.0, *) { cameraTypes.append(.external) }
+        else { cameraTypes.append(.externalUnknown) }
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: cameraTypes,
+            mediaType: .video,
+            position: .unspecified
+        )
+        let cameraCandidates = discovery.devices
+            .filter { $0.uniqueID != deviceIdentifier.uuidString && $0.isConnected }
+            .sorted { $0.deviceType == .builtInWideAngleCamera && $1.deviceType != .builtInWideAngleCamera }
+        let selectedCameraAndFormat = cameraCandidates.lazy.compactMap { camera in
+            camera.formats.first(where: { format in
+                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                let supports720p30 = dimensions.width == Int32(width) && dimensions.height == Int32(height)
+                    && format.videoSupportedFrameRateRanges.contains { $0.minFrameRate <= 30 && $0.maxFrameRate >= 30 }
+                let pixelFormat = CMFormatDescriptionGetMediaSubType(format.formatDescription)
+                return supports720p30 && (pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+                    || pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+            }).map { (camera, $0) }
+        }.first
+        if let (camera, format) = selectedCameraAndFormat {
+            physicalCamera = camera
+            physicalCameraFormat = format
+            logger.notice("physical camera candidate name=\(camera.localizedName, privacy: .public) unique_id=\(camera.uniqueID, privacy: .public) format=1280x720 native_pixel_format=\(self.fourCC(CMFormatDescriptionGetMediaSubType(format.formatDescription)), privacy: .public) output_pixel_format=\(self.fourCC(self.capturePixelFormat), privacy: .public) fps=30")
+            return true
+        } else {
+            logger.error("no physical camera format supports 1280x720 30fps native bi-planar 4:2:0; will retry when a client starts streaming")
+            return false
         }
     }
 

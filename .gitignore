@@ -53,3 +53,7 @@ PRIVATECAM_CURRENT_STATE_AUDIT_EVIDENCE.zip.sha256
 /docs/gates/Archive.zip
 /build/
 /Prototype/Segmentation/.build/
+
+# Review capture bundles (screenshots and videos are already ignored)
+review/**/*.zip
+review/*.zip

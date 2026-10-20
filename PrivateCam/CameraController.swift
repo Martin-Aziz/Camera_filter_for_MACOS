@@ -57,8 +57,9 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     private var activeOutput: AVCaptureVideoDataOutput?
     private var sessionObservers: [NSObjectProtocol] = []
     private var availabilityObservers: [NSObjectProtocol] = []
-    // Retained so its `devices` list can be observed: the virtual camera may
-    // register after launch without a matching connection notification.
+    // Observed only as a change signal: the virtual camera may register after
+    // launch without a matching connection notification. Its snapshot can go
+    // stale after the extension is replaced, so lookups use a fresh session.
     private lazy var discoverySession: AVCaptureDevice.DiscoverySession = {
         let types: [AVCaptureDevice.DeviceType]
         if #available(macOS 14.0, *) { types = [.external] } else { types = [.externalUnknown] }
@@ -140,6 +141,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         lightToneEnabled = skin.lightToneEnabled
         lightToneIntensity = skin.lightToneIntensity
         refreshPersonalBackgrounds()
+        removeDuplicatePersonalBackgrounds()
         launchAtLoginEnabled = UserDefaults.standard.bool(forKey: CameraProcessingConfiguration.launchAtLoginKey)
         isRestoringConfiguration = false
         installObservers()
@@ -185,7 +187,9 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     private var startAttemptInFlight = false // Main-thread owned.
 
     private func discoveredDevices() -> [AVCaptureDevice] {
-        discoverySession.devices
+        let types: [AVCaptureDevice.DeviceType]
+        if #available(macOS 14.0, *) { types = [.external] } else { types = [.externalUnknown] }
+        return AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video, position: .unspecified).devices
     }
 
     func refreshDevices() {
@@ -247,7 +251,11 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
 
     private func deviceAvailabilityChanged(_ notification: Notification, connected: Bool) {
         let device = notification.object as? AVCaptureDevice
-        guard device?.uniqueID == targetDeviceID else { return }
+        guard device?.uniqueID == targetDeviceID else {
+            // Another device changed; the Aurevix Cam snapshot may have too.
+            refreshDevices()
+            return
+        }
         logger.notice("Aurevix Cam availability notification connected=\(connected, privacy: .public) unique_id=\(self.targetDeviceID, privacy: .public)")
         if connected {
             refreshDevices()
@@ -388,6 +396,57 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         return url.standardizedFileURL.path.hasPrefix(root + "/")
     }
 
+    /// 32×32 grayscale thumbnail used to recognise the same picture after
+    /// re-encoding.
+    private static func visualSignature(of image: CGImage) -> [UInt8]? {
+        let side = 32
+        var pixels = [UInt8](repeating: 0, count: side * side)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8,
+                                          bytesPerRow: side, space: CGColorSpaceCreateDeviceGray(),
+                                          bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        return drawn ? pixels : nil
+    }
+
+    private static func visualSignature(ofFileAt url: URL) -> [UInt8]? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return visualSignature(of: image)
+    }
+
+    /// Mean absolute difference under 2.5 gray levels: survives JPEG
+    /// re-encoding, while different photos differ by far more.
+    private static func isSameImage(_ a: [UInt8], _ b: [UInt8]) -> Bool {
+        guard a.count == b.count, !a.isEmpty else { return false }
+        let total = zip(a, b).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
+        return Double(total) / Double(a.count) < 2.5
+    }
+
+    /// Deletes copies of the same imported photo, keeping the selected one
+    /// (or the first) of each group.
+    func removeDuplicatePersonalBackgrounds() {
+        let selected = CameraProcessingConfiguration.read().backgroundFilePath
+        var kept: [[UInt8]] = []
+        let ordered = personalBackgrounds.filter { $0.path == selected } + personalBackgrounds.filter { $0.path != selected }
+        for url in ordered {
+            guard let signature = Self.visualSignature(ofFileAt: url) else {
+                logger.notice("duplicate check could not read \(url.lastPathComponent, privacy: .public)")
+                continue
+            }
+            if !kept.contains(where: { Self.isSameImage($0, signature) }) {
+                kept.append(signature)
+            } else {
+                logger.notice("removing duplicate imported background \(url.lastPathComponent, privacy: .public)")
+                try? removePersonalBackground(url)
+            }
+        }
+        refreshPersonalBackgrounds()
+    }
+
     func refreshPersonalBackgrounds() {
         guard let directory = personalBackgroundDirectory() else { personalBackgrounds = []; return }
         let urls = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
@@ -445,6 +504,17 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         guard CGImageDestinationFinalize(imageDestination) else {
             throw NSError(domain: "AurevixCam.Import", code: 5,
                           userInfo: [NSLocalizedDescriptionKey: "Aurevix Cam couldn’t save the imported image."])
+        }
+        // Re-encoding is not byte-stable (HEIC → JPEG), so duplicates are
+        // matched by appearance: reuse an existing copy instead of a new tile.
+        if let encoded = CGImageSourceCreateWithData(imageData, nil),
+           let encodedImage = CGImageSourceCreateImageAtIndex(encoded, 0, nil),
+           let signature = Self.visualSignature(of: encodedImage),
+           let existing = personalBackgrounds.first(where: { url in
+               Self.visualSignature(ofFileAt: url).map { Self.isSameImage(signature, $0) } ?? false
+           }) {
+            selectPersonalBackground(existing)
+            return
         }
         try (imageData as Data).write(to: destination, options: .atomic)
         var config = currentProcessingConfiguration()

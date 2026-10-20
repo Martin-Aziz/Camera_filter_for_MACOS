@@ -11,7 +11,7 @@ struct PrivateCamApp: App {
             ContentView(controller: controller)
         }
         .handlesExternalEvents(matching: ["studio"])
-        .defaultSize(width: 800, height: 800)
+        .defaultSize(width: 900, height: 760)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(replacing: .appSettings) { SettingsCommand() }
@@ -195,7 +195,6 @@ private struct MenuBarController: View {
                 Spacer()
                 Toggle("Lighting", isOn: $controller.lightToneEnabled).toggleStyle(.switch).labelsHidden().controlSize(.small)
             }
-            .disabled(!controller.effectsEnabled)
             Divider()
             MenuRowButton(title: "Open Aurevix Cam…", shortcut: "⌘O") {
                 StudioWindowOpener.open = { openWindow(id: "studio") }
@@ -215,9 +214,11 @@ private struct MenuBarController: View {
     private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         HStack(spacing: 6) {
             Text(title).font(.callout).foregroundStyle(.secondary).frame(width: 74, alignment: .leading)
-            content()
+            HStack(spacing: 6) { content() }.frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .disabled(!controller.effectsEnabled)
+        .opacity(controller.effectsEnabled ? 1 : 0.4)
     }
 
     private func iconChoice(_ symbol: String, _ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -273,7 +274,7 @@ struct ContentView: View {
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
 
-            preview.padding(.horizontal, 20)
+            preview.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20)
 
             VStack(alignment: .leading, spacing: 14) {
                 section("Background") { backgroundTiles }
@@ -290,8 +291,11 @@ struct ContentView: View {
                     }
                 }
                 Divider()
-                section("Lighting") {
-                    Toggle("Lighting", isOn: $controller.lightToneEnabled).toggleStyle(.switch).labelsHidden()
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 12) {
+                        Text("Lighting").font(.headline)
+                        Toggle("Lighting", isOn: $controller.lightToneEnabled).toggleStyle(.switch).labelsHidden()
+                    }
                     if controller.lightToneEnabled {
                         labeledSlider("Brightness", value: $controller.lightToneIntensity, low: "soft", high: "bright")
                     }
@@ -299,7 +303,7 @@ struct ContentView: View {
             }
             .padding(20)
         }
-        .frame(minWidth: 760, minHeight: 760)
+        .frame(minWidth: 760, minHeight: 700)
         .background(.background)
         .onAppear {
             StudioWindowOpener.open = { openWindow(id: "studio") }
