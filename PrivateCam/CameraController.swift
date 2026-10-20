@@ -15,7 +15,17 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     @Published var session: AVCaptureSession?
     @Published var isCapturing = false
     @Published var isStarting = false
-    @Published var isDeviceAvailable = false
+    @Published var isDeviceAvailable = false { didSet { updateSetupStateFromAvailability() } }
+    /// What the status pill shows. "Missing" is only reported after the
+    /// launch re-checks have run with fresh device lists.
+    @Published private(set) var setupState: CameraSetupState = .checking
+    private var launchChecksFinished = false
+    private var missingRecheckTimer: Timer?
+    private var fixTimeout: DispatchWorkItem?
+    private var fixPollGeneration = 0
+    private var resumePreviewAfterFix = false
+    /// True between submitting activation and macOS's answer.
+    private var activationPending = false
     @Published private(set) var discoveryComplete = false
     @Published private(set) var operationalError: String?
     @Published var isInterrupted = false
@@ -147,6 +157,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         launchAtLoginEnabled = UserDefaults.standard.bool(forKey: CameraProcessingConfiguration.launchAtLoginKey)
         isRestoringConfiguration = false
         installObservers()
+        scheduleLaunchChecks()
     }
 
     deinit {
@@ -164,21 +175,174 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         logger.notice("activation requested for \(self.extensionID, privacy: .public)")
     }
 
+    // MARK: Camera setup status and the Fix action
+
+    /// Fresh device checks right after launch: the virtual camera can register
+    /// a moment after the app starts (for example at login).
+    private func scheduleLaunchChecks() {
+        refreshDevices()
+        for delay in [0.5, 2.0, 5.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                self.refreshDevices()
+                if delay == 5.0 {
+                    self.launchChecksFinished = true
+                    self.updateSetupStateFromAvailability()
+                }
+            }
+        }
+    }
+
+    private func updateSetupStateFromAvailability() {
+        // While activation is pending, a listed device may still be the old one.
+        if activationPending { return }
+        if isDeviceAvailable {
+            if setupState != .ready { logger.notice("setup state -> ready (device present)") }
+            setupState = .ready
+            stopMissingRechecks()
+            finishFixIfNeeded()
+            return
+        }
+        switch setupState {
+        case .settingUp, .needsApproval, .needsRestart, .failed:
+            return // An explicit setup outcome stays visible until the device appears.
+        case .ready, .checking, .missing:
+            setupState = launchChecksFinished ? .missing : .checking
+            if launchChecksFinished { startMissingRechecks() }
+        }
+    }
+
+    private func startMissingRechecks() {
+        guard missingRecheckTimer == nil else { return }
+        missingRecheckTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            self?.refreshDevices()
+        }
+    }
+
+    private func stopMissingRechecks() {
+        missingRecheckTimer?.invalidate()
+        missingRecheckTimer = nil
+    }
+
+    /// "Fix": stop our own preview (an open camera during replacement can leave
+    /// the device missing until restart), submit activation, and always end
+    /// in a visible state.
+    /// `force` (Settings → Reinstall camera) activates even when the camera
+    /// is present, which installs a newer bundled extension.
+    func fixCamera(force: Bool = false) {
+        logger.notice("fix clicked force=\(force, privacy: .public) state=\(String(describing: self.setupState), privacy: .public) device_available=\(self.isDeviceAvailable, privacy: .public)")
+        refreshDevices()
+        if isDeviceAvailable && !force {
+            logger.notice("fix: device already present; nothing to do")
+            return
+        }
+        resumePreviewAfterFix = captureRequested || isCapturing
+        if resumePreviewAfterFix { stopCapture() }
+        setupState = .settingUp
+        activationPending = true
+        // Give our own capture session time to release the camera: replacing
+        // the extension while the device is open can leave it missing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (resumePreviewAfterFix ? 1.5 : 0)) { [weak self] in
+            self?.activateExtension()
+        }
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.setupState == .settingUp else { return }
+            self.activationPending = false
+            self.logger.error("fix: no reply from macOS within 30 s")
+            self.setupState = .failed("macOS didn’t respond. Try again, or restart your Mac.")
+        }
+        fixTimeout?.cancel()
+        fixTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
+    }
+
+    /// After a completed activation, poll briefly for the device; if it does
+    /// not appear, the old extension still holds it until a restart.
+    private func waitForDeviceAfterActivation() {
+        fixPollGeneration &+= 1
+        let generation = fixPollGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, generation == self.fixPollGeneration, self.setupState == .settingUp else { return }
+            self.activationPending = false
+            self.fixTimeout?.cancel()
+            self.refreshDevices()
+            if self.isDeviceAvailable {
+                self.logger.notice("fix: device present after activation")
+                self.updateSetupStateFromAvailability()
+            } else {
+                self.logger.notice("fix: activation completed but device missing; restart required")
+                self.setupState = .needsRestart
+            }
+        }
+    }
+
+    private func finishFixIfNeeded() {
+        fixTimeout?.cancel()
+        fixTimeout = nil
+        if resumePreviewAfterFix {
+            resumePreviewAfterFix = false
+            startCapture()
+        }
+    }
+
+    func openExtensionSettings() {
+        let candidates = ["x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
+                          "x-apple.systempreferences:com.apple.preference.security"]
+        for candidate in candidates {
+            if let url = URL(string: candidate), NSWorkspace.shared.open(url) { return }
+        }
+    }
+
+    private static func plainMessage(for error: Error) -> String {
+        let nsError = error as NSError
+        guard nsError.domain == OSSystemExtensionErrorDomain,
+              let code = OSSystemExtensionError.Code(rawValue: nsError.code) else {
+            return "Setup failed: \(error.localizedDescription)"
+        }
+        switch code {
+        case .unsupportedParentBundleLocation:
+            return "Move Aurevix Cam to the Applications folder, then try again."
+        case .requestCanceled:
+            return "Setup was cancelled. Click Fix to try again."
+        case .authorizationRequired:
+            return "macOS needs your approval. Open System Settings to allow Aurevix Cam."
+        case .extensionNotFound, .extensionMissingIdentifier, .codeSignatureInvalid, .validationFailed:
+            return "This copy of Aurevix Cam is damaged. Reinstall it, then try again."
+        default:
+            return "Setup failed: \(error.localizedDescription)"
+        }
+    }
+
     func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
         status = "macOS requires approval in System Settings → Privacy & Security. Approve Aurevix Cam, then return and refresh."
         logger.notice("system reports user approval required")
+        activationPending = false
+        fixTimeout?.cancel()
+        setupState = .needsApproval
     }
 
     func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
         status = "Activation request completed: \(result.rawValue). Refresh the camera list."
         logger.notice("activation completed result=\(result.rawValue, privacy: .public)")
-        refreshDevices()
+        if result == .willCompleteAfterReboot {
+            activationPending = false
+            fixTimeout?.cancel()
+            setupState = .needsRestart
+            return
+        }
+        // The old device can still be listed for a moment, and a replaced one
+        // can vanish; decide only after watching for a few seconds.
+        setupState = .settingUp
+        waitForDeviceAfterActivation()
     }
 
     func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
         let nsError = error as NSError
         status = "Activation failed: \(error.localizedDescription)"
         logger.error("activation failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code) description=\(error.localizedDescription, privacy: .public)")
+        activationPending = false
+        fixTimeout?.cancel()
+        setupState = .failed(Self.plainMessage(for: error))
     }
 
     func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties, withExtension new: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction {

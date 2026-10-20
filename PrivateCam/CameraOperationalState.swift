@@ -37,3 +37,14 @@ enum CameraOperationalState: Equatable {
         }
     }
 }
+
+/// Camera setup status shown in the Studio pill, popup and Settings.
+enum CameraSetupState: Equatable {
+    case checking
+    case ready
+    case settingUp
+    case needsApproval
+    case needsRestart
+    case failed(String)
+    case missing
+}

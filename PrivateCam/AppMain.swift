@@ -29,11 +29,26 @@ struct PrivateCamApp: App {
         MenuBarExtra {
             MenuBarController(controller: controller)
         } label: {
-            // System-sized template symbol, matching other menu bar extras.
-            Image(systemName: "camera")
-                .accessibilityLabel("Aurevix Cam")
+            MenuBarLabel()
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Menu bar icon. Its view exists from launch, so it also makes sure a
+/// manual launch always shows Studio (SwiftUI restores no window when the
+/// previous session ended with all windows closed).
+private struct MenuBarLabel: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        // System-sized template symbol, matching other menu bar extras.
+        Image(systemName: "camera")
+            .accessibilityLabel("Aurevix Cam")
+            .onAppear {
+                StudioWindowOpener.open = { openWindow(id: "studio") }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { StudioWindowOpener.show() }
+            }
     }
 }
 
@@ -51,12 +66,27 @@ enum StudioWindowOpener {
     static var open: (() -> Void)?
 
     static func show() {
-        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("studio") == true }) {
-            window.makeKeyAndOrderFront(nil)
+        if let window = studioWindow {
+            bringForward(window)
         } else {
             open?()
+            // The new window exists on the next run-loop turn.
+            DispatchQueue.main.async { if let window = studioWindow { bringForward(window) } }
         }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private static var studioWindow: NSWindow? {
+        NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("studio") == true })
+    }
+
+    /// Shows the window on the current desktop, in front, even when it was
+    /// created on another Space (for example behind a full-screen app).
+    private static func bringForward(_ window: NSWindow) {
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 }
 
@@ -80,11 +110,11 @@ private final class AurevixApplicationDelegate: NSObject, NSApplicationDelegate 
     /// Launching again from Finder, Launchpad or Spotlight brings Studio back,
     /// so the app stays reachable when the menu bar icon is hidden.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("studio") == true }) {
-            window.makeKeyAndOrderFront(nil)
+        if NSApp.windows.contains(where: { $0.identifier?.rawValue.hasPrefix("studio") == true }) {
+            StudioWindowOpener.show()
             return false
         }
+        NSApp.activate(ignoringOtherApps: true)
         // No Studio window: returning true lets SwiftUI create one.
         return true
     }
@@ -129,36 +159,62 @@ extension CameraController {
     }
 }
 
-/// "Ready for calls", or a plain problem with a Fix action.
+/// "Ready for calls", or a plain problem with the action that fixes it.
 private struct StatusPill: View {
     @ObservedObject var controller: CameraController
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle().fill(color).frame(width: 8, height: 8)
-            Text(title).font(.callout.weight(.medium))
-            if !controller.isDeviceAvailable && !controller.isStarting {
-                Button("Fix") {
-                    controller.activateExtension()
-                    controller.refreshDevices()
-                }
-                .buttonStyle(.borderedProminent).controlSize(.small)
+            switch controller.setupState {
+            case .checking, .settingUp:
+                ProgressView().controlSize(.small)
+            default:
+                Circle().fill(color).frame(width: 8, height: 8)
+            }
+            Text(title).font(.callout.weight(.medium)).lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 300, alignment: .leading)
+            switch controller.setupState {
+            case .missing, .failed:
+                Button("Fix") { controller.fixCamera() }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            case .needsApproval:
+                Button("Open System Settings") { controller.openExtensionSettings() }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            default:
+                EmptyView()
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
+        .fixedSize(horizontal: true, vertical: false)
         .background(.thinMaterial, in: Capsule())
-        .accessibilityElement(children: .combine)
+        // Keep the Fix / Open System Settings buttons reachable (VoiceOver too).
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
     }
 
-    private var title: String {
-        if controller.isDeviceAvailable { return "Ready for calls" }
-        if controller.isStarting { return "Starting…" }
-        return "Camera not set up"
-    }
+    private var title: String { controller.setupState.title }
 
     private var color: Color {
-        if controller.isDeviceAvailable { return .green }
-        return controller.isStarting ? .secondary : .orange
+        switch controller.setupState {
+        case .ready: return .green
+        case .failed: return .red
+        case .checking, .settingUp: return .secondary
+        case .missing, .needsApproval, .needsRestart: return .orange
+        }
+    }
+}
+
+extension CameraSetupState {
+    var title: String {
+        switch self {
+        case .checking: return "Checking camera…"
+        case .ready: return "Ready for calls"
+        case .settingUp: return "Setting up camera…"
+        case .needsApproval: return "Approve in System Settings"
+        case .needsRestart: return "Restart your Mac to finish setup"
+        case .failed(let message): return message
+        case .missing: return "Camera not set up"
+        }
     }
 }
 
@@ -171,8 +227,8 @@ private struct MenuBarController: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Circle().fill(controller.isDeviceAvailable ? Color.green : Color.orange).frame(width: 8, height: 8)
-                    .accessibilityLabel(controller.isDeviceAvailable ? "Ready for calls" : "Camera not set up")
+                Circle().fill(controller.setupState == .ready ? Color.green : Color.orange).frame(width: 8, height: 8)
+                    .accessibilityLabel(controller.setupState.title).help(controller.setupState.title)
                 Text("Effects").font(.headline)
                 Spacer()
                 Toggle("Effects", isOn: $controller.effectsEnabled).toggleStyle(.switch).labelsHidden()
@@ -476,9 +532,9 @@ struct SettingsView: View {
                     }))
             }
             Section("Camera setup") {
-                LabeledContent("Status", value: controller.isDeviceAvailable ? "Ready for calls" : "Camera not set up")
+                LabeledContent("Status", value: controller.setupState.title)
                 HStack {
-                    Button("Reinstall camera") { controller.activateExtension() }
+                    Button("Reinstall camera") { controller.fixCamera(force: true) }
                     Button("Check again") { controller.refreshDevices() }
                 }
                 Text(controller.status).font(.caption).foregroundStyle(.secondary)
