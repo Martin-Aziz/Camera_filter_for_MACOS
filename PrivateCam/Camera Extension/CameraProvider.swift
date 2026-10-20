@@ -11,6 +11,9 @@ private let width = 1280
 private let height = 720
 private let framePeriodNanoseconds: UInt64 = 1_000_000_000 / UInt64(frameRate)
 private let processedFrameFreshnessNanoseconds: UInt64 = 100_000_000
+// A validated composite may be republished while newer frames are late or
+// fail; only a stall longer than this window falls back to neutral output.
+private let processedFrameHoldNanoseconds: UInt64 = 500_000_000
 private let deviceIdentifier = UUID(uuidString: "76A10B58-2C45-4B8C-BE2A-0D6F1C286101")!
 private let streamIdentifier = UUID(uuidString: "76A10B58-2C45-4B8C-BE2A-0D6F1C286102")!
 private let logger = Logger(subsystem: "com.martinaziz.privatecam", category: "CameraExtension")
@@ -102,6 +105,11 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private var sendIntervalsMs: [Double] = []
     private var previousSendUptime: UInt64?
     private var processingFallbacks = 0
+    private var processingBusyDrops = 0
+    // Neutral-frame diagnosis (queue-owned): why the publisher had no frame.
+    private var neutralCauseCounts: [String: Int] = [:]
+    private var lastProcessingFailureCause: String?
+    private var lastAcceptedInputUptime: UInt64?
     private var processingFrameAgeDrops = 0
     private var lastEngineStatus: String?
     private var engineStatusHeartbeat: DispatchSourceTimer?
@@ -516,10 +524,12 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
             guard age.isFinite, age >= 0, age <= 100 else {
                 processingFrameAgeDrops += 1
                 rejectionCounts["capture_age"] = (rejectionCounts["capture_age"] ?? 0) + 1
+                lastProcessingFailureCause = "stale"
                 logger.error("capture frame rejected before processing cause_observation=unknown age_ms=\(age, privacy: .public) relay_wait_ms=\(relayWait, privacy: .public) processing_queue_wait_ms=\(self.processingQueueWaitMs.last ?? 0, privacy: .public)")
                 return false
             }
             receivedPhysicalFrames += 1
+            lastAcceptedInputUptime = captureArrivalUptime
             return true
         }
         guard captureAccepted else { return }
@@ -581,13 +591,16 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
                     (configuration != currentConfiguration ? "effect_changed" :
                      (frameAgeMs > 100 ? "publication_age" : "publication_validation"))
                 rejectionCounts[reason] = (rejectionCounts[reason] ?? 0) + 1
+                lastProcessingFailureCause = neutralCause(forRejection: reason, failureReason: result.failureReason)
                 if result.usedNeutralFallback {
                     processingFallbacks += 1
                     logger.error("processor neutral fallback selected reason=\(result.failureReason ?? "unspecified", privacy: .public)")
                 } else {
                     logger.error("processed frame rejected before publisher slot output_valid=\(outputValid, privacy: .public) configuration_current=\(configuration == currentConfiguration, privacy: .public) age_ms=\(frameAgeMs, privacy: .public)")
                 }
-                processedFrameSlot.invalidate()
+                // Keep the last validated composite: the publisher republishes it
+                // within the hold window instead of flashing neutral.
+                if configuration != currentConfiguration { processedFrameSlot.invalidate() }
                 pendingDiscontinuityFlags.insert(.sampleDropped)
                 return
             }
@@ -615,6 +628,7 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
                 let reason = finalAgeMs > 100 ? "publication_age" :
                     (configuration != CameraProcessingConfiguration.read() ? "effect_changed" : "publication_validation")
                 rejectionCounts[reason] = (rejectionCounts[reason] ?? 0) + 1
+                lastProcessingFailureCause = neutralCause(forRejection: reason, failureReason: nil)
                 pendingDiscontinuityFlags.insert(.sampleDropped)
                 logger.error("final output boundary rejected stale, cancelled, or mismatched frame age_ms=\(finalAgeMs, privacy: .public)")
                 return
@@ -637,7 +651,30 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
                 configuration: configuration, captureArrivalUptime: captureArrivalUptime,
                 sourcePresentationTime: pts, pixelBuffer: output)
             processedFrameSlot.offer(frame)
+            lastProcessingFailureCause = nil
         }
+    }
+
+    private func neutralCause(forRejection reason: String, failureReason: String?) -> String {
+        switch reason {
+        case "effect_changed": return "config_mismatch"
+        case "publication_age", "capture_age": return "stale"
+        case "processor_fallback":
+            let detail = failureReason?.lowercased() ?? ""
+            return detail.contains("no mask") || detail.contains("no person") ? "no_person" : "processing_error"
+        default: return "processing_error"
+        }
+    }
+
+    /// Classifies a neutral publisher tick: no recent camera input, the latest
+    /// processing failure, a configuration change, or a composite that aged out.
+    private func classifyNeutralFrame(nowUptime: UInt64, slotConfigurationMismatch: Bool) -> String {
+        guard let lastInput = lastAcceptedInputUptime, nowUptime >= lastInput,
+              nowUptime - lastInput <= 200_000_000 else {
+            return lastProcessingFailureCause == "stale" ? "stale" : "no_input"
+        }
+        if slotConfigurationMismatch { return "config_mismatch" }
+        return lastProcessingFailureCause ?? "stale"
     }
 
     fileprivate func notePhysicalFrameDrop(generation: UInt64) {
@@ -654,7 +691,10 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         queue.async {
             guard self.streamUsers > 0, self.captureGeneration == generation else { return }
             self.droppedPhysicalFrames += 1
-            if reason == "oldest_pending_frame_replaced" {
+            if reason == "processing_busy" {
+                self.processingBusyDrops += 1
+                logger.debug("frame drop source=bounded_relay reason=processing_busy generation=\(generation, privacy: .public) busy_drops=\(self.processingBusyDrops, privacy: .public)")
+            } else if reason == "oldest_pending_frame_replaced" {
                 self.relayReplacementCount += 1
                 logger.error("frame drop source=bounded_relay reason=pending_replaced generation=\(generation, privacy: .public) relay_replacements=\(self.relayReplacementCount, privacy: .public) total_physical_drops=\(self.droppedPhysicalFrames, privacy: .public)")
             } else if reason == "relay_lock_busy" {
@@ -723,6 +763,10 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         previousSendUptime = nil
         sampleBufferCreationFailures = 0
         processingFallbacks = 0
+        processingBusyDrops = 0
+        neutralCauseCounts = [:]
+        lastProcessingFailureCause = nil
+        lastAcceptedInputUptime = nil
         processingFrameAgeDrops = 0
         pendingDiscontinuityFlags = []
         didLogPhysicalSampleFormatCount = 0
@@ -766,6 +810,9 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         let avgFps = runElapsed > 0 ? Double(receivedPhysicalFrames) / runElapsed : 0
         let receiverCallbackGapMax = receiverArrivalIntervalsMs.max() ?? 0
         let receiverPTSGapMax = receiverPTSIntervalsMs.max() ?? 0
+        let neutralCauseSummary = ["stale", "processing_error", "no_person", "config_mismatch", "no_input"]
+            .map { "\($0):\(neutralCauseCounts[$0] ?? 0)" }.joined(separator: ",")
+        logger.notice("phase3b_summary neutral_frames=\(self.deliveredNeutralFramesThisRun, privacy: .public) output_frames=\(self.generatedFramesThisRun, privacy: .public) neutral_causes=\(neutralCauseSummary, privacy: .public) reused_output_frames=\(self.repeatedOutputFramesThisRun, privacy: .public) processing_busy_drops=\(self.processingBusyDrops, privacy: .public) publish_send_p50_ms=\(self.percentile(self.sendDurationsMs, 0.50), privacy: .public) publish_send_p95_ms=\(self.percentile(self.sendDurationsMs, 0.95), privacy: .public)")
         let rejectionSummary = rejectionCounts.keys.sorted().map { "\($0):\(rejectionCounts[$0] ?? 0)" }.joined(separator: ",")
         logger.notice("stream stopped; source=\(self.activeSourceMode, privacy: .public) output_frames=\(self.generatedFramesThisRun, privacy: .public) processed_output_frames=\(self.deliveredProcessedFramesThisRun, privacy: .public) unique_processed_frames=\(self.processedFrameIDs.count, privacy: .public) unique_presented_processed_frames=\(self.presentedProcessingFrameIDs.count, privacy: .public) reused_output_frames=\(self.repeatedOutputFramesThisRun, privacy: .public) repeated_frame_streak_max=\(self.maximumRepeatedFrameStreak, privacy: .public) repeated_frame_duration_max_ms=\(self.maximumRepeatedFrameDurationMs, privacy: .public) neutral_output_frames=\(self.deliveredNeutralFramesThisRun, privacy: .public) processed_share_pct=\(self.generatedFramesThisRun > 0 ? Double(self.deliveredProcessedFramesThisRun) * 100 / Double(self.generatedFramesThisRun) : 0, privacy: .public) neutral_share_pct=\(self.generatedFramesThisRun > 0 ? Double(self.deliveredNeutralFramesThisRun) * 100 / Double(self.generatedFramesThisRun) : 0, privacy: .public) physical_frames_accepted=\(self.receivedPhysicalFrames, privacy: .public) physical_frame_fps=\(avgFps, privacy: .public) relay_wait_p95_ms=\(relayWaitP95, privacy: .public) processing_queue_wait_p95_ms=\(processingQueueWaitP95, privacy: .public) neutral_fallbacks=\(self.processingFallbacks, privacy: .public) rejection_counts=\(rejectionSummary, privacy: .public) capture_age_p50_ms=\(self.percentile(self.captureTimestampAgeMs, 0.50), privacy: .public) capture_age_p95_ms=\(self.percentile(self.captureTimestampAgeMs, 0.95), privacy: .public) capture_age_p99_ms=\(self.percentile(self.captureTimestampAgeMs, 0.99), privacy: .public) capture_age_max_ms=\(self.captureTimestampAgeMs.max() ?? 0, privacy: .public) capture_to_publication_age_p50_ms=\(self.percentile(self.frameAgeAtPublicationMs, 0.50), privacy: .public) capture_to_publication_age_p95_ms=\(self.percentile(self.frameAgeAtPublicationMs, 0.95), privacy: .public) capture_to_publication_age_p99_ms=\(self.percentile(self.frameAgeAtPublicationMs, 0.99), privacy: .public) stale_rejections=\(self.processingFrameAgeDrops, privacy: .public) capture_drops=\(self.droppedPhysicalFrames, privacy: .public) avfoundation_drops=\(self.avFoundationDropCount, privacy: .public) relay_replacements=\(self.relayReplacementCount, privacy: .public) relay_lock_contentions=\(self.relayContentionCount, privacy: .public) producer_missed_periods=\(self.missedProducerPeriods, privacy: .public) elapsed_s=\(runElapsed, privacy: .public) producer_tick_p50_ms=\(tickP50, privacy: .public) producer_tick_p95_ms=\(tickP95, privacy: .public) producer_tick_p99_ms=\(tickP99, privacy: .public) producer_send_interval_p50_ms=\(publisherSendP50, privacy: .public) producer_send_interval_p95_ms=\(publisherSendP95, privacy: .public) producer_send_interval_p99_ms=\(publisherSendP99, privacy: .public) producer_send_pts_gap_max_ms=\(self.presentationIntervalsMs.max() ?? 0, privacy: .public) capture_pts_gap_max_ms=\(self.capturePresentationIntervalsMs.max() ?? 0, privacy: .public) receiver_callback_gap_p50_ms=\(self.percentile(self.receiverArrivalIntervalsMs, 0.50), privacy: .public) receiver_callback_gap_p95_ms=\(self.percentile(self.receiverArrivalIntervalsMs, 0.95), privacy: .public) receiver_callback_gap_p99_ms=\(self.percentile(self.receiverArrivalIntervalsMs, 0.99), privacy: .public) receiver_callback_gap_max_ms=\(receiverCallbackGapMax, privacy: .public) receiver_pts_gap_p50_ms=\(self.percentile(self.receiverPTSIntervalsMs, 0.50), privacy: .public) receiver_pts_gap_p95_ms=\(self.percentile(self.receiverPTSIntervalsMs, 0.95), privacy: .public) receiver_pts_gap_p99_ms=\(self.percentile(self.receiverPTSIntervalsMs, 0.99), privacy: .public) receiver_pts_gap_max_ms=\(receiverPTSGapMax, privacy: .public) capture_to_publication_p50_ms=\(callbackSendP50, privacy: .public) capture_to_publication_p95_ms=\(callbackSendP95, privacy: .public) capture_to_publication_p99_ms=\(callbackSendP99, privacy: .public) processing_latency_p50_ms=\(processingP50, privacy: .public) processing_latency_p95_ms=\(processingP95, privacy: .public) processing_latency_p99_ms=\(processingP99, privacy: .public) segmentation_p50_ms=\(segmentP50, privacy: .public) segmentation_p95_ms=\(segmentP95, privacy: .public) processing_p50_ms=\(totalP50, privacy: .public) processing_p95_ms=\(totalP95, privacy: .public) processing_p99_ms=\(totalP99, privacy: .public) allocation_failures=\(self.allocationFailuresThisRun, privacy: .public) sample_buffer_failures=\(self.sampleBufferCreationFailures, privacy: .public) remaining_consumers=\(self.streamUsers, privacy: .public)")
     }
@@ -799,14 +846,18 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
 
         guard let pixelBufferPool else { return }
         let configuration = CameraProcessingConfiguration.read()
+        let slotConfigurationMismatch = processedFrameSlot.latest.map { $0.configuration != configuration } ?? false
         let selected = processedFrameSlot.takeIfCurrent(generation: captureGeneration,
             configuration: configuration, nowUptime: tickUptime,
-            maximumAgeNanoseconds: processedFrameFreshnessNanoseconds)
+            maximumAgeNanoseconds: processedFrameHoldNanoseconds)
         // Keep publishing the most recent validated composite while it remains
         // within the same 100 ms freshness window. Vision can finish just after
         // a 30 FPS publisher tick; reusing the immutable processed buffer for
         // the next tick avoids a neutral flash without ever exposing source.
         if selected == nil {
+            let cause = classifyNeutralFrame(nowUptime: tickUptime, slotConfigurationMismatch: slotConfigurationMismatch)
+            neutralCauseCounts[cause, default: 0] += 1
+            logger.notice("neutral frame cause=\(cause, privacy: .public) tick=\(self.timerTickNumber, privacy: .public)")
             updateEngineStatus("Neutral fallback active (awaiting a fresh processed frame).")
         }
         let isProcessed = selected != nil
@@ -988,40 +1039,32 @@ private final class BoundedPhysicalFrameRelay {
     private let lock = NSLock()
     private let deliveryQueue: DispatchQueue
     private let consume: (PendingPhysicalFrame) -> Void
-    private var pendingFrame: PendingPhysicalFrame?
-    private var drainScheduled = false
+    private var busy = false
 
     init(label: String, consume: @escaping (PendingPhysicalFrame) -> Void) {
         deliveryQueue = DispatchQueue(label: label, qos: .userInteractive)
         self.consume = consume
     }
 
-    // Nonblocking producer side. At most one frame waits for the serial delivery
-    // worker; when it is occupied, the waiting slot keeps only the newest frame.
+    // Nonblocking producer side. Nothing queues behind the processing worker:
+    // while it is busy the newest incoming frame is dropped, so latency never
+    // accumulates and every processed frame starts fresh.
     func enqueue(_ frame: PendingPhysicalFrame) -> String? {
         guard lock.try() else { return "relay_lock_busy" }
-        let replaced = pendingFrame != nil
-        pendingFrame = frame
-        if !drainScheduled {
-            drainScheduled = true
-            deliveryQueue.async { [weak self] in self?.drain() }
-        }
-        lock.unlock()
-        return replaced ? "oldest_pending_frame_replaced" : nil
-    }
-
-    private func drain() {
-        while true {
-            lock.lock()
-            guard let frame = pendingFrame else {
-                drainScheduled = false
-                lock.unlock()
-                return
-            }
-            pendingFrame = nil
+        guard !busy else {
             lock.unlock()
-            consume(frame)
+            return "processing_busy"
         }
+        busy = true
+        lock.unlock()
+        deliveryQueue.async { [weak self] in
+            guard let self else { return }
+            self.consume(frame)
+            self.lock.lock()
+            self.busy = false
+            self.lock.unlock()
+        }
+        return nil
     }
 }
 
