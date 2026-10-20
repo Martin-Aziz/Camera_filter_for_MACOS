@@ -110,6 +110,11 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private var neutralCauseCounts: [String: Int] = [:]
     private var lastProcessingFailureCause: String?
     private var lastAcceptedInputUptime: UInt64?
+    // Capture session synchronization clock (queue-owned); sample PTS values
+    // are expressed on it and must be converted before comparing to host time.
+    private var captureSyncClock: CMClock?
+    private var captureClockDiagnosticsLogged = 0
+    private var cameraToExtensionMs: [Double] = []
     private var processingFrameAgeDrops = 0
     private var lastEngineStatus: String?
     private var engineStatusHeartbeat: DispatchSourceTimer?
@@ -405,6 +410,8 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
                 let configuredPixelFormat = (output.videoSettings[kCVPixelBufferPixelFormatTypeKey as String] as? NSNumber)?.uint32Value ?? 0
                 logger.notice("physical capture output settings width=\(configuredWidth, privacy: .public) height=\(configuredHeight, privacy: .public) pixel_format=\(self.fourCC(configuredPixelFormat), privacy: .public) auto_dimensions_api=unavailable_on_macos")
                 session.commitConfiguration()
+                let syncClock = session.synchronizationClock
+                self.onStateQueue { self.captureSyncClock = syncClock }
                 self.captureSessionObservers = [
                     NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification,
                         object: session, queue: nil) { [weak self] _ in
@@ -519,8 +526,22 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
                 }
             }
             previousReceivedPresentationTime = pts
-            let age = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), pts)) * 1_000
-            if age.isFinite, age >= 0 { appendBounded(age, to: &captureTimestampAgeMs) }
+            // Camera-to-extension delay: sample PTS converted from the session's
+            // synchronization clock to host time, measured at callback arrival.
+            let hostClock = CMClockGetHostTimeClock()
+            let hostPTS = captureSyncClock.map { CMSyncConvertTime(pts, from: $0, to: hostClock) } ?? pts
+            let arrivalHostTime = CMTime(value: CMTimeValue(captureArrivalUptime), timescale: 1_000_000_000)
+            let age = CMTimeGetSeconds(CMTimeSubtract(arrivalHostTime, hostPTS)) * 1_000
+            if captureClockDiagnosticsLogged < 5 {
+                captureClockDiagnosticsLogged += 1
+                let rawAge = CMTimeGetSeconds(CMTimeSubtract(CMClockGetTime(hostClock), pts)) * 1_000
+                let clockIsHost = captureSyncClock.map { CFEqual($0, hostClock) } ?? false
+                logger.notice("capture clock check sample=\(self.captureClockDiagnosticsLogged, privacy: .public) sync_clock_present=\(self.captureSyncClock != nil, privacy: .public) sync_clock_is_host=\(clockIsHost, privacy: .public) raw_pts_age_ms=\(rawAge, privacy: .public) converted_arrival_age_ms=\(age, privacy: .public)")
+            }
+            if age.isFinite, age >= 0 {
+                appendBounded(age, to: &captureTimestampAgeMs)
+                appendBounded(age, to: &cameraToExtensionMs)
+            }
             guard age.isFinite, age >= 0, age <= 100 else {
                 processingFrameAgeDrops += 1
                 rejectionCounts["capture_age"] = (rejectionCounts["capture_age"] ?? 0) + 1
@@ -571,8 +592,9 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         onStateQueue {
             guard streamUsers > 0, captureGeneration == generation else { return }
             let currentConfiguration = CameraProcessingConfiguration.read()
-            let hostNow = CMClockGetTime(CMClockGetHostTimeClock())
-            let frameAgeMs = CMTimeGetSeconds(CMTimeSubtract(hostNow, pts)) * 1_000
+            // Freshness covers what the extension controls: time since the frame
+            // reached the extension. Arrival age is bounded separately above.
+            let frameAgeMs = Double(DispatchTime.now().uptimeNanoseconds - captureArrivalUptime) / 1_000_000
             let output = result.pixelBuffer
             let outputValid = !result.usedNeutralFallback && output !== source
                 && CVPixelBufferGetWidth(output) == width
@@ -614,8 +636,7 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
                 return
             }
             appendBounded(processingLatency, to: &processingTotalMs)
-            let finalAgeMs = CMTimeGetSeconds(CMTimeSubtract(
-                CMClockGetTime(CMClockGetHostTimeClock()), pts)) * 1_000
+            let finalAgeMs = Double(DispatchTime.now().uptimeNanoseconds - captureArrivalUptime) / 1_000_000
             let finalPublication = ProcessedFramePublicationConditions(
                 generationIsCurrent: streamUsers > 0 && captureGeneration == generation && !captureInterrupted,
                 effectConfigurationIsCurrent: configuration == CameraProcessingConfiguration.read(),
@@ -767,6 +788,8 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         neutralCauseCounts = [:]
         lastProcessingFailureCause = nil
         lastAcceptedInputUptime = nil
+        captureClockDiagnosticsLogged = 0
+        cameraToExtensionMs = []
         processingFrameAgeDrops = 0
         pendingDiscontinuityFlags = []
         didLogPhysicalSampleFormatCount = 0
@@ -812,7 +835,7 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         let receiverPTSGapMax = receiverPTSIntervalsMs.max() ?? 0
         let neutralCauseSummary = ["stale", "processing_error", "no_person", "config_mismatch", "no_input"]
             .map { "\($0):\(neutralCauseCounts[$0] ?? 0)" }.joined(separator: ",")
-        logger.notice("phase3b_summary neutral_frames=\(self.deliveredNeutralFramesThisRun, privacy: .public) output_frames=\(self.generatedFramesThisRun, privacy: .public) neutral_causes=\(neutralCauseSummary, privacy: .public) reused_output_frames=\(self.repeatedOutputFramesThisRun, privacy: .public) processing_busy_drops=\(self.processingBusyDrops, privacy: .public) publish_send_p50_ms=\(self.percentile(self.sendDurationsMs, 0.50), privacy: .public) publish_send_p95_ms=\(self.percentile(self.sendDurationsMs, 0.95), privacy: .public)")
+        logger.notice("phase3b_summary neutral_frames=\(self.deliveredNeutralFramesThisRun, privacy: .public) output_frames=\(self.generatedFramesThisRun, privacy: .public) neutral_causes=\(neutralCauseSummary, privacy: .public) reused_output_frames=\(self.repeatedOutputFramesThisRun, privacy: .public) processing_busy_drops=\(self.processingBusyDrops, privacy: .public) publish_send_p50_ms=\(self.percentile(self.sendDurationsMs, 0.50), privacy: .public) publish_send_p95_ms=\(self.percentile(self.sendDurationsMs, 0.95), privacy: .public) camera_to_extension_p50_ms=\(self.percentile(self.cameraToExtensionMs, 0.50), privacy: .public) camera_to_extension_p95_ms=\(self.percentile(self.cameraToExtensionMs, 0.95), privacy: .public) extension_to_publication_p50_ms=\(self.percentile(self.callbackToSendLatencyMs, 0.50), privacy: .public) extension_to_publication_p95_ms=\(self.percentile(self.callbackToSendLatencyMs, 0.95), privacy: .public)")
         let rejectionSummary = rejectionCounts.keys.sorted().map { "\($0):\(rejectionCounts[$0] ?? 0)" }.joined(separator: ",")
         logger.notice("stream stopped; source=\(self.activeSourceMode, privacy: .public) output_frames=\(self.generatedFramesThisRun, privacy: .public) processed_output_frames=\(self.deliveredProcessedFramesThisRun, privacy: .public) unique_processed_frames=\(self.processedFrameIDs.count, privacy: .public) unique_presented_processed_frames=\(self.presentedProcessingFrameIDs.count, privacy: .public) reused_output_frames=\(self.repeatedOutputFramesThisRun, privacy: .public) repeated_frame_streak_max=\(self.maximumRepeatedFrameStreak, privacy: .public) repeated_frame_duration_max_ms=\(self.maximumRepeatedFrameDurationMs, privacy: .public) neutral_output_frames=\(self.deliveredNeutralFramesThisRun, privacy: .public) processed_share_pct=\(self.generatedFramesThisRun > 0 ? Double(self.deliveredProcessedFramesThisRun) * 100 / Double(self.generatedFramesThisRun) : 0, privacy: .public) neutral_share_pct=\(self.generatedFramesThisRun > 0 ? Double(self.deliveredNeutralFramesThisRun) * 100 / Double(self.generatedFramesThisRun) : 0, privacy: .public) physical_frames_accepted=\(self.receivedPhysicalFrames, privacy: .public) physical_frame_fps=\(avgFps, privacy: .public) relay_wait_p95_ms=\(relayWaitP95, privacy: .public) processing_queue_wait_p95_ms=\(processingQueueWaitP95, privacy: .public) neutral_fallbacks=\(self.processingFallbacks, privacy: .public) rejection_counts=\(rejectionSummary, privacy: .public) capture_age_p50_ms=\(self.percentile(self.captureTimestampAgeMs, 0.50), privacy: .public) capture_age_p95_ms=\(self.percentile(self.captureTimestampAgeMs, 0.95), privacy: .public) capture_age_p99_ms=\(self.percentile(self.captureTimestampAgeMs, 0.99), privacy: .public) capture_age_max_ms=\(self.captureTimestampAgeMs.max() ?? 0, privacy: .public) capture_to_publication_age_p50_ms=\(self.percentile(self.frameAgeAtPublicationMs, 0.50), privacy: .public) capture_to_publication_age_p95_ms=\(self.percentile(self.frameAgeAtPublicationMs, 0.95), privacy: .public) capture_to_publication_age_p99_ms=\(self.percentile(self.frameAgeAtPublicationMs, 0.99), privacy: .public) stale_rejections=\(self.processingFrameAgeDrops, privacy: .public) capture_drops=\(self.droppedPhysicalFrames, privacy: .public) avfoundation_drops=\(self.avFoundationDropCount, privacy: .public) relay_replacements=\(self.relayReplacementCount, privacy: .public) relay_lock_contentions=\(self.relayContentionCount, privacy: .public) producer_missed_periods=\(self.missedProducerPeriods, privacy: .public) elapsed_s=\(runElapsed, privacy: .public) producer_tick_p50_ms=\(tickP50, privacy: .public) producer_tick_p95_ms=\(tickP95, privacy: .public) producer_tick_p99_ms=\(tickP99, privacy: .public) producer_send_interval_p50_ms=\(publisherSendP50, privacy: .public) producer_send_interval_p95_ms=\(publisherSendP95, privacy: .public) producer_send_interval_p99_ms=\(publisherSendP99, privacy: .public) producer_send_pts_gap_max_ms=\(self.presentationIntervalsMs.max() ?? 0, privacy: .public) capture_pts_gap_max_ms=\(self.capturePresentationIntervalsMs.max() ?? 0, privacy: .public) receiver_callback_gap_p50_ms=\(self.percentile(self.receiverArrivalIntervalsMs, 0.50), privacy: .public) receiver_callback_gap_p95_ms=\(self.percentile(self.receiverArrivalIntervalsMs, 0.95), privacy: .public) receiver_callback_gap_p99_ms=\(self.percentile(self.receiverArrivalIntervalsMs, 0.99), privacy: .public) receiver_callback_gap_max_ms=\(receiverCallbackGapMax, privacy: .public) receiver_pts_gap_p50_ms=\(self.percentile(self.receiverPTSIntervalsMs, 0.50), privacy: .public) receiver_pts_gap_p95_ms=\(self.percentile(self.receiverPTSIntervalsMs, 0.95), privacy: .public) receiver_pts_gap_p99_ms=\(self.percentile(self.receiverPTSIntervalsMs, 0.99), privacy: .public) receiver_pts_gap_max_ms=\(receiverPTSGapMax, privacy: .public) capture_to_publication_p50_ms=\(callbackSendP50, privacy: .public) capture_to_publication_p95_ms=\(callbackSendP95, privacy: .public) capture_to_publication_p99_ms=\(callbackSendP99, privacy: .public) processing_latency_p50_ms=\(processingP50, privacy: .public) processing_latency_p95_ms=\(processingP95, privacy: .public) processing_latency_p99_ms=\(processingP99, privacy: .public) segmentation_p50_ms=\(segmentP50, privacy: .public) segmentation_p95_ms=\(segmentP95, privacy: .public) processing_p50_ms=\(totalP50, privacy: .public) processing_p95_ms=\(totalP95, privacy: .public) processing_p99_ms=\(totalP99, privacy: .public) allocation_failures=\(self.allocationFailuresThisRun, privacy: .public) sample_buffer_failures=\(self.sampleBufferCreationFailures, privacy: .public) remaining_consumers=\(self.streamUsers, privacy: .public)")
     }
