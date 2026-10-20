@@ -126,6 +126,7 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
     override init() {
         super.init()
         queue.setSpecific(key: queueKey, value: 1)
+        processingQueue.async { [weak self] in self?.warmUpProcessing() }
         physicalFrameRelay = BoundedPhysicalFrameRelay(label: "com.martinaziz.privatecam.physical-frame-delivery") { [weak self] frame in
             guard let self else { return }
             self.processingQueue.async {
@@ -696,6 +697,24 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         }
         if slotConfigurationMismatch { return "config_mismatch" }
         return lastProcessingFailureCause ?? "stale"
+    }
+
+    /// Runs the full pipeline once on a synthetic frame at extension load so
+    /// Vision models, Metal shaders and the Core Image context are compiled
+    /// before the first real frame arrives.
+    private func warmUpProcessing() {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let attributes: [CFString: Any] = [kCVPixelBufferWidthKey: width, kCVPixelBufferHeightKey: height,
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+        var pool: CVPixelBufferPool?
+        var source: CVPixelBuffer?
+        guard CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attributes as CFDictionary, &pool) == kCVReturnSuccess,
+              let pool, CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &source) == kCVReturnSuccess,
+              let source else { return }
+        let result = backgroundProcessor.process(pixelBuffer: source, outputPool: pool, treatment: .blur(radius: 12),
+                                                  skinRefinementIntensity: 0.16, lightToneEnabled: true)
+        logger.notice("processing warm-up finished elapsed_ms=\(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000, privacy: .public) neutral=\(result.usedNeutralFallback, privacy: .public)")
     }
 
     fileprivate func notePhysicalFrameDrop(generation: UInt64) {

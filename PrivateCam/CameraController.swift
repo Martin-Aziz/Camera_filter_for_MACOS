@@ -39,6 +39,12 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     @Published var motionStatistics = "Unique processed-video FPS: unavailable (no active stream)"
     @Published var streamHealth = "Stream health: waiting for receiver data."
     @Published var launchAtLoginEnabled = false
+    @Published var showInDock = DockVisibility.isEnabled {
+        didSet {
+            UserDefaults.standard.set(showInDock, forKey: DockVisibility.key)
+            DockVisibility.apply(showInDock)
+        }
+    }
     @Published var loginItemStatus = ""
 
     private let extensionID = "com.martinaziz.privatecam.CameraExtension"
@@ -49,6 +55,14 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     private var activeOutput: AVCaptureVideoDataOutput?
     private var sessionObservers: [NSObjectProtocol] = []
     private var availabilityObservers: [NSObjectProtocol] = []
+    // Retained so its `devices` list can be observed: the virtual camera may
+    // register after launch without a matching connection notification.
+    private lazy var discoverySession: AVCaptureDevice.DiscoverySession = {
+        let types: [AVCaptureDevice.DeviceType]
+        if #available(macOS 14.0, *) { types = [.external] } else { types = [.externalUnknown] }
+        return AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video, position: .unspecified)
+    }()
+    private var discoveryObservation: NSKeyValueObservation?
     private var lifecycleObservers: [NSObjectProtocol] = []
     // captureRequested is main-thread owned and retained only across bounded recovery.
     private var captureRequestGeneration: UInt64 = 0
@@ -161,14 +175,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     private var startAttemptInFlight = false // Main-thread owned.
 
     private func discoveredDevices() -> [AVCaptureDevice] {
-        let types: [AVCaptureDevice.DeviceType]
-        if #available(macOS 14.0, *) {
-            types = [.external]
-        } else {
-            types = [.externalUnknown]
-        }
-        return AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: .video,
-                                                position: .unspecified).devices
+        discoverySession.devices
     }
 
     func refreshDevices() {
@@ -203,6 +210,9 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
 
     private func installObservers() {
         let center = NotificationCenter.default
+        discoveryObservation = discoverySession.observe(\.devices, options: [.new]) { [weak self] _, _ in
+            self?.refreshDevices()
+        }
         availabilityObservers.append(center.addObserver(forName: AVCaptureDevice.wasConnectedNotification,
             object: nil, queue: .main) { [weak self] notification in
                 self?.deviceAvailabilityChanged(notification, connected: true)

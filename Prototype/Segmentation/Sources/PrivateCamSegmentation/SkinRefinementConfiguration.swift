@@ -30,7 +30,8 @@ public struct SkinRefinementConfiguration: Equatable {
     }
     public static func read(from defaults: UserDefaults? = UserDefaults(suiteName: "MPLX762T5G.com.martinaziz.privatecam")) -> Self {
         guard let defaults else { return Self() }
-        return Self(preset: SkinRefinementPreset(rawValue: defaults.string(forKey: presetKey) ?? "off") ?? .off,
+        // First launch (no stored preset) starts at the gentlest visible preset.
+        return Self(preset: SkinRefinementPreset(rawValue: defaults.string(forKey: presetKey) ?? "subtle") ?? .subtle,
                     intensity: defaults.object(forKey: intensityKey) as? Double ?? 0.2,
                     lightToneEnabled: defaults.bool(forKey: lightToneEnabledKey),
                     lightToneIntensity: defaults.object(forKey: lightToneIntensityKey) as? Double ?? 0.35)

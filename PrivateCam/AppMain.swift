@@ -21,18 +21,56 @@ struct PrivateCamApp: App {
         MenuBarExtra {
             MenuBarController(controller: controller)
         } label: {
-            Image(systemName: "camera").font(.system(size: 15, weight: .regular))
+            // System-sized template symbol, matching other menu bar extras.
+            Image(systemName: "camera")
                 .accessibilityLabel("Aurevix Cam")
         }
         .menuBarExtraStyle(.window)
     }
 }
 
+/// Opens the Studio window from AppKit callbacks; set by SwiftUI views that
+/// hold an `openWindow` action.
+enum StudioWindowOpener {
+    static var open: (() -> Void)?
+
+    static func show() {
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("studio") == true }) {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            open?()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+enum DockVisibility {
+    static let key = "aurevixShowInDock"
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: key) }
+    static func apply(_ visible: Bool) {
+        NSApp.setActivationPolicy(visible ? .regular : .accessory)
+        if visible { NSApp.activate(ignoringOtherApps: true) }
+    }
+}
+
 private final class AurevixApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DockVisibility.apply(DockVisibility.isEnabled)
         DispatchQueue.main.async {
             NSApp.mainMenu?.items.first?.title = "Aurevix Cam"
         }
+    }
+
+    /// Launching again from Finder, Launchpad or Spotlight brings Studio back,
+    /// so the app stays reachable when the menu bar icon is hidden.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("studio") == true }) {
+            window.makeKeyAndOrderFront(nil)
+            return false
+        }
+        // No Studio window: returning true lets SwiftUI create one.
+        return true
     }
 }
 
@@ -93,8 +131,8 @@ private struct MenuBarController: View {
                 }
             }
             Button("Open Studio…") {
-                openWindow(id: "studio")
-                NSApp.activate(ignoringOtherApps: true)
+                StudioWindowOpener.open = { openWindow(id: "studio") }
+                StudioWindowOpener.show()
             }
                 .keyboardShortcut("o")
             Divider()
@@ -116,6 +154,10 @@ struct ContentView: View {
     @State private var importError: String?
     @State private var isPersonalPhotosExpanded = false
     var body: some View {
+        content.onAppear { StudioWindowOpener.open = { openWindow(id: "studio") } }
+    }
+
+    private var content: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Image(nsImage: NSApplication.shared.applicationIconImage)
@@ -130,6 +172,7 @@ struct ContentView: View {
                 Menu {
                     Button("Activate Camera Extension") { controller.activateExtension() }
                     Button("Refresh Devices") { controller.refreshDevices() }
+                    Toggle("Show in Dock", isOn: $controller.showInDock)
                 } label: { Image(systemName: "ellipsis.circle").font(.title3) }
                     .menuStyle(.borderlessButton).help("More camera options")
             }
