@@ -12,6 +12,11 @@ final class SegmentationTests: XCTestCase {
         XCTAssertEqual(SkinRefinementConfiguration(preset: .refined).effectiveIntensity, 0.36, accuracy: 0.001)
         XCTAssertEqual(SkinRefinementConfiguration(preset: .custom, intensity: 9).effectiveIntensity, 0.4)
         XCTAssertEqual(SkinRefinementConfiguration(preset: .custom, intensity: -2).effectiveIntensity, 0)
+        // Strength 0.5 keeps each preset's tuned value; the slider spans 0 to 2x, capped at 0.40.
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .subtle, strength: 0).effectiveIntensity, 0)
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .subtle, strength: 1).effectiveIntensity, 0.32, accuracy: 0.001)
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .refined, strength: 1).effectiveIntensity, 0.4, accuracy: 0.001)
+        XCTAssertEqual(SkinRefinementPreset.visiblePresets, [.off, .subtle, .refined])
         let suite = "AurevixCamTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }

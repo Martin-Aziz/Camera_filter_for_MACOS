@@ -28,11 +28,13 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     @Published var blurPreset: CameraBlurPreset = .natural { didSet { persistProcessingConfiguration() } }
     @Published var backgroundPresetID = "soft-blue" { didSet { persistProcessingConfiguration() } }
     @Published var backgroundFilePath = "" { didSet { persistProcessingConfiguration() } }
+    @Published var effectsEnabled = true { didSet { persistProcessingConfiguration() } }
     @Published private(set) var importedBackgroundPath = ""
     @Published private(set) var importedBackgroundPreview: NSImage?
     @Published private(set) var personalBackgrounds: [URL] = []
     @Published var skinPreset: SkinRefinementPreset = .off { didSet { persistSkinConfiguration() } }
     @Published var skinIntensity: Double = 0.2 { didSet { persistSkinConfiguration() } }
+    @Published var skinStrength: Double = 0.5 { didSet { persistSkinConfiguration() } }
     @Published var lightToneEnabled = false { didSet { persistSkinConfiguration() } }
     @Published var lightToneIntensity = 0.35 { didSet { persistSkinConfiguration() } }
     @Published var processingStatus = "Processing status unavailable. Start a virtual-camera client to confirm."
@@ -114,6 +116,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         blurPreset = config.blurPreset
         backgroundPresetID = config.backgroundPresetID
         backgroundFilePath = config.backgroundFilePath
+        effectsEnabled = config.effectsEnabled
         // Persist canonicalized preferences so removed stock-scene IDs migrate
         // once to a supported neutral background while imported photos survive.
         config.write(to: CameraProcessingConfiguration.sharedDefaults())
@@ -125,8 +128,15 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
             importedBackgroundPreview = NSImage(contentsOfFile: importedBackgroundPath)
         }
         let skin = SkinRefinementConfiguration.read()
-        skinPreset = skin.preset
         skinIntensity = skin.intensity
+        if skin.preset == .custom {
+            // Custom is no longer offered: keep the same look as Natural + strength.
+            skinPreset = .subtle
+            skinStrength = min(max(skin.intensity / (SkinRefinementPreset.subtle.intensity * 2), 0), 1)
+        } else {
+            skinPreset = skin.preset
+            skinStrength = skin.strength
+        }
         lightToneEnabled = skin.lightToneEnabled
         lightToneIntensity = skin.lightToneIntensity
         refreshPersonalBackgrounds()
@@ -309,13 +319,29 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         guard !isRestoringConfiguration else { return }
         CameraProcessingConfiguration(mode: backgroundMode, red: backgroundRed, green: backgroundGreen,
                                       blue: backgroundBlue, blurRadius: blurIntensity, blurPreset: blurPreset,
-                                      backgroundPresetID: backgroundPresetID, backgroundFilePath: backgroundFilePath)
+                                      backgroundPresetID: backgroundPresetID, backgroundFilePath: backgroundFilePath,
+                                      effectsEnabled: effectsEnabled)
             .write(to: CameraProcessingConfiguration.sharedDefaults())
     }
 
     func selectBackground(_ presetID: String) {
         var config = currentProcessingConfiguration()
         config.selectBackground(presetID: presetID)
+        applyProcessingConfiguration(config)
+    }
+
+    /// "None": keep the real room (still rendered by the extension).
+    func selectOriginalBackground() {
+        selectBackground("none")
+    }
+
+    /// "Blur": the single user-facing blur, tuned with `blurIntensity`.
+    func selectBlurBackground() {
+        var config = currentProcessingConfiguration()
+        config.mode = .blur
+        config.blurPreset = .natural
+        config.backgroundPresetID = "blur"
+        config.backgroundFilePath = ""
         applyProcessingConfiguration(config)
     }
 
@@ -376,7 +402,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         guard !isRestoringConfiguration else { return }
         SkinRefinementConfiguration(preset: skinPreset, intensity: min(max(skinIntensity, 0), 0.4),
                                     lightToneEnabled: lightToneEnabled,
-                                    lightToneIntensity: lightToneIntensity).write()
+                                    lightToneIntensity: lightToneIntensity, strength: skinStrength).write()
     }
 
     func importBackground(from sourceURL: URL) throws {
@@ -444,7 +470,8 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     private func currentProcessingConfiguration() -> CameraProcessingConfiguration {
         CameraProcessingConfiguration(mode: backgroundMode, red: backgroundRed, green: backgroundGreen,
             blue: backgroundBlue, blurRadius: blurIntensity, blurPreset: blurPreset,
-            backgroundPresetID: backgroundPresetID, backgroundFilePath: backgroundFilePath)
+            backgroundPresetID: backgroundPresetID, backgroundFilePath: backgroundFilePath,
+            effectsEnabled: effectsEnabled)
     }
 
     private func applyProcessingConfiguration(_ config: CameraProcessingConfiguration) {
@@ -459,6 +486,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         blurPreset = config.blurPreset
         backgroundPresetID = config.backgroundPresetID
         backgroundFilePath = config.backgroundFilePath
+        effectsEnabled = config.effectsEnabled
         isRestoringConfiguration = false
         config.write(to: CameraProcessingConfiguration.sharedDefaults())
     }

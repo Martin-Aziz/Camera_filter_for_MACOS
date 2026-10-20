@@ -9,10 +9,18 @@ struct PrivateCamApp: App {
     var body: some Scene {
         WindowGroup("Aurevix Cam", id: "studio") {
             ContentView(controller: controller)
-                .frame(minWidth: 800, minHeight: 480)
         }
         .handlesExternalEvents(matching: ["studio"])
-        .commands { CommandGroup(replacing: .newItem) {} }
+        .defaultSize(width: 800, height: 800)
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .appSettings) { SettingsCommand() }
+        }
+
+        Window("Aurevix Cam Settings", id: "settings") {
+            SettingsView(controller: controller)
+        }
+        .windowResizability(.contentSize)
 
         WindowGroup("About Aurevix Cam", id: "credits") {
             CreditsView().frame(width: 530, height: 470)
@@ -26,6 +34,14 @@ struct PrivateCamApp: App {
                 .accessibilityLabel("Aurevix Cam")
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// ⌘, opens the Settings window (a plain Window scene; works on macOS 13).
+private struct SettingsCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Settings…") { openWindow(id: "settings") }.keyboardShortcut(",", modifiers: .command)
     }
 }
 
@@ -74,330 +90,403 @@ private final class AurevixApplicationDelegate: NSObject, NSApplicationDelegate 
     }
 }
 
+// MARK: - Shared effect controls
+
+/// One user-facing blur amount (0...1) spread across the three tuned presets.
+extension CameraController {
+    var blurAmount: Double {
+        get {
+            switch blurPreset {
+            case .natural, .softBlue: return blurIntensity / 3
+            case .soft: return (1 + blurIntensity) / 3
+            case .strong: return (2 + blurIntensity) / 3
+            }
+        }
+        set {
+            let value = min(max(newValue, 0), 1) * 3
+            let band = min(Int(value), 2)
+            blurPreset = [.natural, .soft, .strong][band]
+            blurIntensity = value - Double(band)
+        }
+    }
+
+    var isOriginalBackground: Bool { backgroundMode == .original }
+    var isBlurBackground: Bool { backgroundMode == .blur && blurPreset != .softBlue }
+    var isPhotoBackground: Bool { backgroundMode == .image }
+
+    func importPhotoWithPanel() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try importBackground(from: url)
+            selectImportedBackground()
+        } catch {
+            status = "Couldn’t add photo: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// "Ready for calls", or a plain problem with a Fix action.
+private struct StatusPill: View {
+    @ObservedObject var controller: CameraController
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(title).font(.callout.weight(.medium))
+            if !controller.isDeviceAvailable && !controller.isStarting {
+                Button("Fix") {
+                    controller.activateExtension()
+                    controller.refreshDevices()
+                }
+                .buttonStyle(.borderedProminent).controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(.thinMaterial, in: Capsule())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var title: String {
+        if controller.isDeviceAvailable { return "Ready for calls" }
+        if controller.isStarting { return "Starting…" }
+        return "Camera not set up"
+    }
+
+    private var color: Color {
+        if controller.isDeviceAvailable { return .green }
+        return controller.isStarting ? .secondary : .orange
+    }
+}
+
+// MARK: - Menu bar popup
+
 private struct MenuBarController: View {
     @ObservedObject var controller: CameraController
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Aurevix Cam").font(.headline)
-                    Text(controller.isDeviceAvailable ? "Virtual camera available" : "Virtual camera unavailable")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Circle().fill(controller.isDeviceAvailable ? Color.green : Color.orange).frame(width: 8, height: 8)
+                    .accessibilityLabel(controller.isDeviceAvailable ? "Ready for calls" : "Camera not set up")
+                Text("Effects").font(.headline)
                 Spacer()
-                Circle().fill(controller.isDeviceAvailable ? Color.green : Color.secondary).frame(width: 8, height: 8)
+                Toggle("Effects", isOn: $controller.effectsEnabled).toggleStyle(.switch).labelsHidden()
             }
             Divider()
-            Button(controller.isCapturing || controller.isStarting || controller.captureRequested ? "Stop Local Preview" : "Start Local Preview") {
-                controller.toggleCapture()
-            }
-            .disabled(!controller.isCapturing && !controller.isStarting && !controller.isDeviceAvailable)
-            Menu("Background") {
-                Button("Off / Neutral") { controller.selectBackground("neutral") }
-                Button("Soft Blue") { controller.selectBackground("soft-blue") }
-                Button("Solid Background") { controller.selectSolidBackground() }
-                Divider()
-                Button("Natural Blur") { controller.backgroundMode = .blur; controller.blurPreset = .natural }
-                Button("Soft Blur") { controller.backgroundMode = .blur; controller.blurPreset = .soft }
-                Button("Strong Blur") { controller.backgroundMode = .blur; controller.blurPreset = .strong }
-                if !controller.personalBackgrounds.isEmpty { Divider() }
-                ForEach(controller.personalBackgrounds, id: \.path) { url in
-                    Button(url.deletingPathExtension().lastPathComponent) { controller.selectPersonalBackground(url) }
+            row("Background") {
+                iconChoice("person.crop.rectangle", "None", selected: controller.isOriginalBackground) { controller.selectOriginalBackground() }
+                iconChoice("camera.filters", "Blur", selected: controller.isBlurBackground) { controller.selectBlurBackground() }
+                iconChoice("photo", "Photo", selected: controller.isPhotoBackground) {
+                    if let first = controller.personalBackgrounds.first { controller.selectPersonalBackground(first) }
+                    else { controller.importPhotoWithPanel() }
                 }
             }
-            Menu("Beauty") {
-                ForEach(SkinRefinementPreset.allCases.filter { $0 != .custom }) { preset in
-                    Button {
-                        controller.skinPreset = preset
-                    } label: {
-                        if controller.skinPreset == preset { Label(preset.title, systemImage: "checkmark") }
-                        else { Text(preset.title) }
-                    }
-                }
+            row("Look") {
+                Picker("Look", selection: $controller.skinPreset) {
+                    ForEach(SkinRefinementPreset.visiblePresets) { Text($0.title).tag($0) }
+                }.pickerStyle(.segmented).labelsHidden().controlSize(.small)
             }
-            Button("Add Photo…") {
-                let panel = NSOpenPanel()
-                panel.allowedContentTypes = [.image]
-                panel.allowsMultipleSelection = false
-                panel.canChooseDirectories = false
-                guard panel.runModal() == .OK, let url = panel.url else { return }
-                do {
-                    try controller.importBackground(from: url)
-                    controller.selectImportedBackground()
-                } catch {
-                    controller.status = "Couldn’t import background: \(error.localizedDescription)"
-                }
+            row("Lighting") {
+                Spacer()
+                Toggle("Lighting", isOn: $controller.lightToneEnabled).toggleStyle(.switch).labelsHidden().controlSize(.small)
             }
-            Button("Open Studio…") {
+            .disabled(!controller.effectsEnabled)
+            Divider()
+            MenuRowButton(title: "Open Aurevix Cam…", shortcut: "⌘O") {
                 StudioWindowOpener.open = { openWindow(id: "studio") }
                 StudioWindowOpener.show()
             }
-                .keyboardShortcut("o")
-            Divider()
-            Button("Quit Aurevix Cam") {
+            .keyboardShortcut("o")
+            MenuRowButton(title: "Quit Aurevix Cam", shortcut: "⌘Q") {
                 controller.stopCapture()
                 NSApp.terminate(nil)
             }
+            .keyboardShortcut("q")
         }
         .padding(12)
-        .frame(width: 300)
+        .frame(width: 280)
+    }
+
+    private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(.callout).foregroundStyle(.secondary).frame(width: 74, alignment: .leading)
+            content()
+        }
+        .disabled(!controller.effectsEnabled)
+    }
+
+    private func iconChoice(_ symbol: String, _ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).frame(width: 40, height: 24)
+                .background(selected ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.06),
+                            in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain).help(label).accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
+/// Plain menu-style row with hover highlight.
+private struct MenuRowButton: View {
+    let title: String
+    let shortcut: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(shortcut).foregroundStyle(hovering ? Color.white.opacity(0.8) : Color.secondary)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .foregroundStyle(hovering ? Color.white : Color.primary)
+            .background(hovering ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - Studio
+
 struct ContentView: View {
     @ObservedObject var controller: CameraController
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openWindow) private var openWindow
-    @State private var isImportingBackground = false
     @State private var importError: String?
-    @State private var isPersonalPhotosExpanded = false
-    var body: some View {
-        content.onAppear { StudioWindowOpener.open = { openWindow(id: "studio") } }
-    }
 
-    private var content: some View {
+    var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(nsImage: NSApplication.shared.applicationIconImage)
-                    .resizable().frame(width: 34, height: 34).clipShape(RoundedRectangle(cornerRadius: 8))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Aurevix Cam").font(.headline)
-                    Text(controller.isDeviceAvailable ? "Virtual camera available" : "Waiting for virtual camera")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+            HStack(spacing: 10) {
+                Text("Aurevix Cam").font(.title3.weight(.semibold))
                 Spacer()
-                statusBadge
-                Menu {
-                    Button("Activate Camera Extension") { controller.activateExtension() }
-                    Button("Refresh Devices") { controller.refreshDevices() }
-                    Toggle("Show in Dock", isOn: $controller.showInDock)
-                } label: { Image(systemName: "ellipsis.circle").font(.title3) }
-                    .menuStyle(.borderlessButton).help("More camera options")
-            }
-            .padding(.horizontal, 22).padding(.vertical, 14)
-            Divider()
-            HStack(spacing: 20) {
-                VStack(spacing: 12) {
-                    ZStack(alignment: .bottomLeading) {
-                        Group {
-                            if let session = controller.session {
-                                CameraPreview(session: session).scaleEffect(x: -1, y: 1)
-                            } else {
-                                RoundedRectangle(cornerRadius: 13).fill(.black.opacity(0.82))
-                                    .overlay {
-                                        VStack(spacing: 10) {
-                                            Image(systemName: "video.badge.waveform").font(.system(size: 32)).foregroundStyle(.white.opacity(0.8))
-                                            Text(controller.isStarting ? "Connecting to Aurevix Cam…" : "Your processed preview will appear here")
-                                                .font(.callout).foregroundStyle(.white.opacity(0.8))
-                                        }.padding()
-                                    }
-                            }
-                        }
-                        .aspectRatio(16 / 9, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 13))
-                        HStack(spacing: 7) {
-                            Circle().fill(controller.isCapturing ? Color.green : Color.secondary).frame(width: 7, height: 7)
-                            Text(controller.isCapturing ? "PREVIEW LIVE" : "PREVIEW OFF").font(.system(size: 10, weight: .semibold, design: .rounded))
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 7)
-                        .background(.regularMaterial, in: Capsule()).padding(12)
-                    }
-                    HStack {
-                        Label(controller.isCapturing ? "Local preview running" : "Local preview idle", systemImage: "camera")
-                        Spacer()
-                        Text(controller.statistics.components(separatedBy: "|").first?.trimmingCharacters(in: .whitespaces) ?? "Receiver waiting")
-                            .monospacedDigit().foregroundStyle(.secondary)
-                    }.font(.caption)
-                    HStack {
-                        Text(controller.motionStatistics).monospacedDigit()
-                        Spacer(minLength: 0)
-                    }.font(.caption2).foregroundStyle(.secondary).lineLimit(1).help(controller.motionStatistics)
-                }
-                .frame(maxWidth: .infinity)
-                effectsPanel.frame(width: 300)
-            }
-            .padding(20)
-            Divider()
-            HStack(spacing: 12) {
-                Button {
-                    controller.toggleCapture()
-                } label: {
-                    Label(controller.captureRequested || controller.isCapturing || controller.isStarting ? "Stop Preview" : "Start Preview",
-                          systemImage: controller.captureRequested || controller.isCapturing || controller.isStarting ? "stop.fill" : "play.fill")
-                }
-                .buttonStyle(.borderedProminent).disabled(!controller.captureRequested && !controller.isCapturing && !controller.isStarting && !controller.isDeviceAvailable)
-                Label(controller.isInterrupted ? "Interrupted — recovering" : controller.status,
-                      systemImage: controller.isInterrupted ? "arrow.clockwise" : (controller.isCapturing ? "checkmark.circle.fill" : "info.circle"))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Spacer()
-                Menu("Diagnostics") {
-                    Text(controller.processingStatus)
-                    Text(controller.streamHealth)
-                    Divider()
-                    Text(controller.deviceList)
-                }
-                .menuStyle(.borderlessButton)
-                Button("About Aurevix Cam") { openWindow(id: "credits") }
-                    .buttonStyle(.plain).help("About Aurevix Cam")
+                StatusPill(controller: controller)
+                Button { openWindow(id: "settings") } label: { Image(systemName: "gearshape") }
+                    .buttonStyle(.borderless).help("Settings (⌘,)").accessibilityLabel("Settings")
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
+
+            preview.padding(.horizontal, 20)
+
+            VStack(alignment: .leading, spacing: 14) {
+                section("Background") { backgroundTiles }
+                if controller.isBlurBackground {
+                    labeledSlider("Blur", value: $controller.blurAmount, low: "less", high: "more")
+                }
+                Divider()
+                section("Look your best") {
+                    Picker("Look your best", selection: $controller.skinPreset) {
+                        ForEach(SkinRefinementPreset.visiblePresets) { Text($0.title).tag($0) }
+                    }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                    if controller.skinPreset != .off {
+                        labeledSlider("Strength", value: $controller.skinStrength, low: "subtle", high: "strong")
+                    }
+                }
+                Divider()
+                section("Lighting") {
+                    Toggle("Lighting", isOn: $controller.lightToneEnabled).toggleStyle(.switch).labelsHidden()
+                    if controller.lightToneEnabled {
+                        labeledSlider("Brightness", value: $controller.lightToneIntensity, low: "soft", high: "bright")
+                    }
+                }
+            }
+            .padding(20)
         }
+        .frame(minWidth: 760, minHeight: 760)
         .background(.background)
-        .frame(minWidth: 920, minHeight: 510)
         .onAppear {
+            StudioWindowOpener.open = { openWindow(id: "studio") }
             controller.refreshDevices()
             controller.startMonitoringEngineStatus()
+            // The preview follows the window: it runs while Studio is open.
+            if !controller.captureRequested && !controller.isCapturing { controller.startCapture() }
         }
         .onDisappear {
             controller.stopCapture()
             controller.stopMonitoringEngineStatus()
         }
-        .fileImporter(isPresented: $isImportingBackground, allowedContentTypes: [.image], allowsMultipleSelection: false) { result in
-            do {
-                let selected = try result.get()
-                guard let url = selected.first else { throw CocoaError(.fileNoSuchFile) }
-                try controller.importBackground(from: url)
-                importError = nil
-            } catch {
-                importError = error.localizedDescription
-            }
-        }
-        .alert("Couldn’t Import Image", isPresented: Binding(
+        .alert("Couldn’t Add Photo", isPresented: Binding(
             get: { importError != nil }, set: { if !$0 { importError = nil } }
         )) { Button("OK", role: .cancel) {} } message: { Text(importError ?? "") }
     }
 
-    private var statusBadge: some View {
-        let operationalState = controller.operationalState
-        let processingActive = operationalState == .previewRunning
-        return HStack(spacing: 6) {
-            Circle().fill(processingActive ? Color.green : (controller.isStarting ? Color.orange : Color.secondary)).frame(width: 7, height: 7)
-            Text(operationalState.title)
-                .font(.caption.weight(.medium))
+    /// The Aurevix Cam output itself (what call apps receive), mirrored like a mirror.
+    private var preview: some View {
+        Group {
+            if let session = controller.session {
+                CameraPreview(session: session).scaleEffect(x: -1, y: 1)
+            } else {
+                Rectangle().fill(.black.opacity(0.85)).overlay {
+                    VStack(spacing: 8) {
+                        Image(systemName: "video").font(.system(size: 30)).foregroundStyle(.white.opacity(0.75))
+                        Text(controller.isDeviceAvailable ? "Starting preview…" : "Waiting for the camera…")
+                            .font(.callout).foregroundStyle(.white.opacity(0.75))
+                    }
+                }
+            }
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(.thinMaterial, in: Capsule())
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .accessibilityLabel("Live preview")
     }
 
-    private var effectsPanel: some View {
-        ScrollView {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("SKIN REFINEMENT").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Picker("Skin refinement", selection: $controller.skinPreset) {
-                ForEach(SkinRefinementPreset.allCases) { preset in Text(preset.title).tag(preset) }
-            }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Skin refinement preset")
-            if controller.skinPreset == .custom {
-                HStack { Text("Smoothing"); Spacer(); Text("\(Int(controller.skinIntensity / 0.4 * 100))%").monospacedDigit().foregroundStyle(.secondary) }.font(.caption)
-                Slider(value: $controller.skinIntensity, in: 0...0.4).accessibilityLabel("Custom skin smoothing intensity")
-            }
-            Toggle("Light & tone", isOn: $controller.lightToneEnabled)
-                .accessibilityLabel("Light and tone correction")
-            if controller.lightToneEnabled {
-                HStack { Text("Intensity"); Spacer(); Text("\(Int(controller.lightToneIntensity * 100))%")
-                    .monospacedDigit().foregroundStyle(.secondary) }.font(.caption)
-                Slider(value: $controller.lightToneIntensity, in: 0...1)
-                    .accessibilityLabel("Light and tone intensity")
-            }
-            Divider()
-            Text("BACKGROUND FILTERS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            VStack(spacing: 7) {
-                effectRow("Off / Neutral", symbol: "circle.slash", selected: controller.backgroundMode == .solid && controller.backgroundPresetID == "neutral") {
-                    controller.selectBackground("neutral")
+    private var backgroundTiles: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                SymbolTile(symbol: "person.crop.rectangle", title: "None", selected: controller.isOriginalBackground) {
+                    controller.selectOriginalBackground()
                 }
-                effectRow("Soft Blue", symbol: "rectangle.fill", selected: controller.backgroundMode == .blur && controller.blurPreset == .softBlue) {
-                    controller.selectBackground("soft-blue")
+                SymbolTile(symbol: "camera.filters", title: "Blur", selected: controller.isBlurBackground) {
+                    controller.selectBlurBackground()
                 }
-                effectRow("Natural Blur", symbol: "camera.filters", selected: controller.backgroundMode == .blur && controller.blurPreset == .natural) { select(.natural) }
-                effectRow("Soft Blur", symbol: "camera.filters", selected: controller.backgroundMode == .blur && controller.blurPreset == .soft) { select(.soft) }
-                effectRow("Strong Blur", symbol: "camera.filters", selected: controller.backgroundMode == .blur && controller.blurPreset == .strong) { select(.strong) }
-                effectRow("Solid Background", symbol: "circle.lefthalf.filled", selected: controller.backgroundMode == .solid && controller.backgroundPresetID == "solid") { controller.selectSolidBackground() }
+                ForEach(controller.personalBackgrounds, id: \.path) { url in
+                    PhotoTile(url: url,
+                              selected: controller.isPhotoBackground && controller.backgroundFilePath == url.path,
+                              select: { controller.selectPersonalBackground(url) },
+                              remove: {
+                                  do { try controller.removePersonalBackground(url) }
+                                  catch { importError = error.localizedDescription }
+                              })
+                }
+                SymbolTile(symbol: "plus", title: "Add photo", selected: false) { controller.importPhotoWithPanel() }
             }
-            Divider()
-            if controller.backgroundMode == .blur && controller.blurPreset != .softBlue {
-                HStack { Text("Blur strength"); Spacer(); Text("\(Int(controller.blurIntensity * 100))%").monospacedDigit().foregroundStyle(.secondary) }
-                    .font(.caption)
-                Slider(value: $controller.blurIntensity, in: 0...1)
-                    .accessibilityLabel("Blur intensity")
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
+            content()
+        }
+    }
+
+    private func labeledSlider(_ title: String, value: Binding<Double>, low: String, high: String) -> some View {
+        HStack(spacing: 10) {
+            Text(title).frame(width: 74, alignment: .leading)
+            Text(low).font(.caption).foregroundStyle(.secondary)
+            Slider(value: value, in: 0...1).accessibilityLabel(title).frame(maxWidth: 360)
+            Text(high).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private let tileSize = CGSize(width: 96, height: 60)
+
+private struct SymbolTile: View {
+    let symbol: String
+    let title: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: symbol).font(.title2)
+                Text(title).font(.caption)
             }
-            if controller.backgroundMode == .solid {
-                ColorPicker("Background color", selection: Binding(
+            .frame(width: tileSize.width, height: tileSize.height)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2.5))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain).accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Thumbnail only; remove from the hover ✕ or right-click.
+private struct PhotoTile: View {
+    let url: URL
+    let selected: Bool
+    let select: () -> Void
+    let remove: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: select) {
+            Group {
+                if let image = NSImage(contentsOf: url) {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    Color.gray.opacity(0.3)
+                }
+            }
+            .frame(width: tileSize.width, height: tileSize.height).clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2.5))
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) {
+            if hovering {
+                Button(action: remove) {
+                    Image(systemName: "xmark.circle.fill").font(.body).foregroundStyle(.white, .black.opacity(0.6))
+                }
+                .buttonStyle(.plain).padding(4).help("Remove photo").accessibilityLabel("Remove photo")
+            }
+        }
+        .onHover { hovering = $0 }
+        .contextMenu { Button("Remove Photo", role: .destructive, action: remove) }
+        .accessibilityLabel("Background photo")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+// MARK: - Settings
+
+struct SettingsView: View {
+    @ObservedObject var controller: CameraController
+    @State private var diagnosticsExpanded = false
+
+    var body: some View {
+        Form {
+            Section("General") {
+                Toggle("Open at login", isOn: Binding(get: { controller.launchAtLoginEnabled },
+                                                      set: { controller.setLaunchAtLogin($0) }))
+                Toggle("Show in Dock", isOn: $controller.showInDock)
+            }
+            Section("More backgrounds") {
+                HStack {
+                    Button("Use Soft Blue") { controller.selectBackground("soft-blue") }
+                    Button("Use solid color") { controller.selectSolidBackground() }
+                }
+                ColorPicker("Solid color", selection: Binding(
                     get: { Color(red: controller.backgroundRed, green: controller.backgroundGreen, blue: controller.backgroundBlue) },
                     set: { color in
                         let converted = NSColor(color).usingColorSpace(.deviceRGB) ?? .darkGray
-                        controller.setBackgroundColor(red: converted.redComponent, green: converted.greenComponent, blue: converted.blueComponent)
-                    }
-                ))
+                        controller.setBackgroundColor(red: converted.redComponent, green: converted.greenComponent,
+                                                      blue: converted.blueComponent)
+                    }))
             }
-            Divider()
-            DisclosureGroup(isExpanded: $isPersonalPhotosExpanded) {
-                if controller.personalBackgrounds.isEmpty {
-                    Text("No personal photos yet. Add a photo to use it as your background.")
-                        .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                } else {
-                    ForEach(controller.personalBackgrounds, id: \.path) { url in
-                        HStack(spacing: 8) {
-                            Button { controller.selectPersonalBackground(url) } label: {
-                                HStack(spacing: 8) {
-                                    if let image = NSImage(contentsOf: url) {
-                                        Image(nsImage: image).resizable().scaledToFill().frame(width: 42, height: 32).clipped().clipShape(RoundedRectangle(cornerRadius: 5))
-                                    }
-                                    Text(url.deletingPathExtension().lastPathComponent.prefix(18)).lineLimit(1)
-                                    Spacer(minLength: 0)
-                                    if controller.backgroundMode == .image && controller.backgroundFilePath == url.path { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
-                                }.font(.caption)
-                            }.buttonStyle(.plain).accessibilityLabel("Select photo \(url.lastPathComponent)")
-                            Button { try? controller.removePersonalBackground(url) } label: { Image(systemName: "trash") }
-                                .buttonStyle(.plain).help("Remove Photo")
-                        }
+            Section("Camera setup") {
+                LabeledContent("Status", value: controller.isDeviceAvailable ? "Ready for calls" : "Camera not set up")
+                HStack {
+                    Button("Reinstall camera") { controller.activateExtension() }
+                    Button("Check again") { controller.refreshDevices() }
+                }
+                Text(controller.status).font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                DisclosureGroup("Diagnostics", isExpanded: $diagnosticsExpanded) {
+                    let text = [controller.processingStatus, controller.streamHealth, controller.statistics,
+                                controller.motionStatistics, controller.deviceList].joined(separator: "\n")
+                    Text(text).font(.caption.monospaced()).textSelection(.enabled)
+                    Button("Copy diagnostics") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
                     }
                 }
-            } label: {
-                Text("My Photos (\(controller.personalBackgrounds.count))")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            }
-            Button("Add Photo") { isImportingBackground = true }
-                .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
-            Button("Reset Effects") {
-                controller.backgroundMode = .blur
-                controller.blurPreset = .natural
-                controller.blurIntensity = 0.5
-                controller.setBackgroundColor(red: 0.24, green: 0.27, blue: 0.30)
-                controller.skinPreset = .off
-            }.buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
-        }
-        .padding(15)
-        }
-        .background {
-            if #available(macOS 26.0, *) {
-                RoundedRectangle(cornerRadius: 14).fill(.clear)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14))
-            } else {
-                RoundedRectangle(cornerRadius: 14).fill(.regularMaterial)
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.primary.opacity(0.06)))
-    }
-
-    private func select(_ preset: CameraBlurPreset) {
-        controller.backgroundMode = .blur
-        controller.blurPreset = preset
-    }
-
-    private func effectRow(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                Image(systemName: symbol).frame(width: 18)
-                Text(title).frame(maxWidth: .infinity, alignment: .leading)
-                if selected { Image(systemName: "checkmark").font(.caption.weight(.semibold)) }
-            }
-            .font(.callout).padding(.horizontal, 9).padding(.vertical, 8)
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-            .background(selected ? Color.accentColor.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .formStyle(.grouped)
+        .frame(width: 480, height: 520)
     }
 }
 

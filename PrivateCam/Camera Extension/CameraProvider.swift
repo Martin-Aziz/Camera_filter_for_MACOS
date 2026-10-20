@@ -561,7 +561,9 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         let generationAtStart = onStateQueue { captureGeneration }
         guard generationAtStart == generation else { return }
         let treatment: BackgroundTreatment
-        if configuration.mode == .solid {
+        if !configuration.effectsEnabled || configuration.mode == .original {
+            treatment = .original
+        } else if configuration.mode == .solid {
             treatment = .solid(CIColor(red: configuration.red, green: configuration.green, blue: configuration.blue))
         } else if configuration.mode == .image {
             let imageURL: URL?
@@ -583,9 +585,10 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         let processStart = DispatchTime.now().uptimeNanoseconds
         onStateQueue { appendBounded(Double(processStart - captureArrivalUptime) / 1_000_000, to: &processingQueueWaitMs) }
         let beauty = SkinRefinementConfiguration.read()
+        let effectsOn = configuration.effectsEnabled
         let result = backgroundProcessor.process(pixelBuffer: source, outputPool: pool, treatment: treatment,
-                                                  skinRefinementIntensity: beauty.effectiveIntensity,
-                                                  lightToneEnabled: beauty.lightToneEnabled,
+                                                  skinRefinementIntensity: effectsOn ? beauty.effectiveIntensity : 0,
+                                                  lightToneEnabled: effectsOn && beauty.lightToneEnabled,
                                                   lightToneIntensity: beauty.lightToneIntensity)
 
         // All checks that authorize publication and the send itself run on the
@@ -1062,6 +1065,8 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
     }
 
     private func effectDisplayName(for configuration: CameraProcessingConfiguration) -> String {
+        if !configuration.effectsEnabled { return "Effects off" }
+        if configuration.mode == .original { return "Original background" }
         if configuration.mode == .solid { return "Solid background" }
         if configuration.mode == .image {
             return configuration.backgroundPresetID == "imported" ? "Imported background" : "Neutral fallback"

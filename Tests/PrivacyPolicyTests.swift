@@ -113,6 +113,25 @@ private enum PrivacyPolicyTests {
             return storedNeutral.mode == .solid && storedNeutral.backgroundPresetID == "neutral"
                 && storedSolid.mode == .solid && storedSolid.backgroundPresetID == "solid"
         }
+        check("None background and the effects switch persist") {
+            let name = "AurevixCamOriginal-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: name)!
+            var config = CameraProcessingConfiguration()
+            config.selectBackground(presetID: "none")
+            config.effectsEnabled = false
+            config.write(to: defaults)
+            let stored = CameraProcessingConfiguration.read(from: defaults)
+            defaults.removePersistentDomain(forName: name)
+            return stored.mode == .original && stored.backgroundPresetID == "none"
+                && stored.backgroundFilePath.isEmpty && stored.effectsEnabled == false
+        }
+        check("effects switch defaults to on for existing installs") {
+            let name = "AurevixCamEffectsDefault-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: name)!
+            let stored = CameraProcessingConfiguration.read(from: defaults)
+            defaults.removePersistentDomain(forName: name)
+            return stored.effectsEnabled
+        }
         check("legacy solid background selection migrates from its color") {
             let name = "AurevixCamLegacySolid-\(UUID().uuidString)"
             let defaults = UserDefaults(suiteName: name)!

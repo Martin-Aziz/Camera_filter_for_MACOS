@@ -3,6 +3,8 @@ import CoreMedia
 import CoreVideo
 
 enum CameraBackgroundMode: String, CaseIterable, Hashable {
+    /// Real room, still rendered through the processor (never the raw buffer).
+    case original = "none"
     case solid
     case blur
     case image
@@ -53,6 +55,7 @@ struct CameraProcessingConfiguration: Equatable {
     static let launchAtLoginKey = "privateCamLaunchAtLogin"
     static let backgroundPresetIDKey = "privateCamBackgroundPresetID"
     static let backgroundFilePathKey = "privateCamBackgroundFilePath"
+    static let effectsEnabledKey = "aurevixEffectsEnabled"
     static let lastImportedBackgroundFilePathKey = "privateCamLastImportedBackgroundFilePath"
     static let engineStatusKey = "privateCamProcessingEngineStatus"
     static let engineStatusTimestampKey = "privateCamProcessingEngineStatusUpdatedAt"
@@ -67,6 +70,9 @@ struct CameraProcessingConfiguration: Equatable {
     var blurPreset: CameraBlurPreset = .softBlue
     var backgroundPresetID: String = "soft-blue"
     var backgroundFilePath: String = ""
+    /// Master switch from the menu bar popup. Off renders the real room with
+    /// no retouch or lighting; the processed-output path is unchanged.
+    var effectsEnabled: Bool = true
 
     /// Applies a supported background as one complete preference snapshot.
     mutating func selectBackground(presetID: String, importedFilePath: String = "") {
@@ -83,6 +89,8 @@ struct CameraProcessingConfiguration: Equatable {
             blue = 0.30
         case "solid":
             mode = .solid
+        case "none":
+            mode = .original
         case "imported":
             mode = .image
         default:
@@ -123,9 +131,15 @@ struct CameraProcessingConfiguration: Equatable {
             }
             backgroundFilePath = ""
         }
+        if mode == .original {
+            backgroundPresetID = "none"
+            backgroundFilePath = ""
+        }
+        let effectsEnabled = defaults.object(forKey: effectsEnabledKey) as? Bool ?? true
         return Self(mode: mode, red: min(max(red, 0), 1), green: min(max(green, 0), 1),
                     blue: min(max(blue, 0), 1), blurRadius: min(max(intensity, 0), 1), blurPreset: preset,
-                    backgroundPresetID: backgroundPresetID, backgroundFilePath: backgroundFilePath)
+                    backgroundPresetID: backgroundPresetID, backgroundFilePath: backgroundFilePath,
+                    effectsEnabled: effectsEnabled)
     }
 
     func write(to defaults: UserDefaults? = UserDefaults(suiteName: Self.suiteName)) {
@@ -138,6 +152,7 @@ struct CameraProcessingConfiguration: Equatable {
         defaults.set(blurPreset.rawValue, forKey: Self.blurPresetKey)
         defaults.set(backgroundPresetID, forKey: Self.backgroundPresetIDKey)
         defaults.set(backgroundFilePath, forKey: Self.backgroundFilePathKey)
+        defaults.set(effectsEnabled, forKey: Self.effectsEnabledKey)
     }
 
     static func sharedDefaults() -> UserDefaults? { UserDefaults(suiteName: suiteName) }

@@ -238,6 +238,9 @@ public enum SegmentationQuality: String, CaseIterable {
 }
 
 public enum BackgroundTreatment {
+    /// Keep the real room: no segmentation; retouch and lighting still apply
+    /// and the frame is still rendered into a new output buffer.
+    case original
     case solid(CIColor)
     case blur(radius: CGFloat)
     case softBlue
@@ -455,6 +458,8 @@ public final class BackgroundReplacementProcessor {
 
         let background: CIImage
         switch treatment {
+        case .original:
+            background = foreground
         case .solid(let color):
             background = CIImage(color: color).cropped(to: extent)
         case .blur(let requestedRadius):
@@ -548,10 +553,15 @@ public final class BackgroundReplacementProcessor {
         var maskDiagnostics = "mask=unavailable"
         // Adaptive cadence: under sustained load, every other frame reuses the
         // previous smoothed matte instead of running Vision.
-        let reuseMask = adaptiveSkipActive && lastFrameSegmented && fault == .none
+        let keepsOriginal: Bool
+        if case .original = treatment { keepsOriginal = true } else { keepsOriginal = false }
+        let reuseMask = !keepsOriginal && adaptiveSkipActive && lastFrameSegmented && fault == .none
             && previousSmoothedMask != nil
             && previousMaskUptimeNanoseconds.map { DispatchTime.now().uptimeNanoseconds - $0 <= 100_000_000 } == true
-        if reuseMask, let previousSmoothedMask {
+        if keepsOriginal {
+            mask = CIImage(color: CIColor(red: 1, green: 1, blue: 1)).cropped(to: extent)
+            maskDiagnostics = "mask=not-needed treatment=original"
+        } else if reuseMask, let previousSmoothedMask {
             mask = previousSmoothedMask
             maskDiagnostics = "mask=reused cadence=every-other-frame"
         } else { do {
@@ -589,7 +599,8 @@ public final class BackgroundReplacementProcessor {
 
         // Mask: temporal smoothing and edge refinement run at Vision's mask
         // resolution; only the refined matte is scaled to the frame.
-        guard let alignment = refinedFrameMask(mask, frameExtent: extent, reusingStoredMask: reuseMask) else {
+        guard let alignment = keepsOriginal ? (image: mask, transform: .identity)
+                : refinedFrameMask(mask, frameExtent: extent, reusingStoredMask: reuseMask) else {
             return pixelBufferFallback(pool: outputPool, width: width, height: height, format: sourceFormat,
                 segmentationMilliseconds: segmentationMilliseconds,
                 compositingMilliseconds: elapsedMilliseconds(since: compositingStart),
@@ -620,6 +631,8 @@ public final class BackgroundReplacementProcessor {
         let backgroundStart = DispatchTime.now().uptimeNanoseconds
         let background: CIImage
         switch treatment {
+        case .original:
+            background = sourceImage
         case .solid(let color):
             background = CIImage(color: color).cropped(to: extent)
         case .blur(let requestedRadius):
