@@ -19,6 +19,46 @@
             "target": "segmentation-benchmark",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release segmentation-benchmark (Prototype/Segmentation)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Camera_filter_for_MACOS}/Prototype/Segmentation",
+            "name": "Debug skin-quality-audit (Prototype/Segmentation)",
+            "target": "skin-quality-audit",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug skin-quality-audit (Prototype/Segmentation)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Camera_filter_for_MACOS}/Prototype/Segmentation",
+            "name": "Release skin-quality-audit (Prototype/Segmentation)",
+            "target": "skin-quality-audit",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release skin-quality-audit (Prototype/Segmentation)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Camera_filter_for_MACOS}/Prototype/Segmentation",
+            "name": "Debug skin-calibration-audit (Prototype/Segmentation)",
+            "target": "skin-calibration-audit",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug skin-calibration-audit (Prototype/Segmentation)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Camera_filter_for_MACOS}/Prototype/Segmentation",
+            "name": "Release skin-calibration-audit (Prototype/Segmentation)",
+            "target": "skin-calibration-audit",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release skin-calibration-audit (Prototype/Segmentation)"
         }
     ]
 }
