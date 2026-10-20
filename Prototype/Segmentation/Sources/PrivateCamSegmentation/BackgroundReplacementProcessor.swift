@@ -368,6 +368,7 @@ public final class BackgroundReplacementProcessor {
     private var lastFrameSegmented = false
     private var recentFrameMilliseconds: [Double] = []
     private let adaptiveWindow = 60
+    private lazy var beautyEngine = BeautyRetouchEngine(context: context)
     private let faceQueue = DispatchQueue(label: "com.martinaziz.privatecam.faces", qos: .userInteractive)
 
     /// Written on `faceQueue`, read after the dispatch group wait.
@@ -506,6 +507,7 @@ public final class BackgroundReplacementProcessor {
         skinRefinementIntensity: Double = 0,
         lightToneEnabled: Bool = false,
         lightToneIntensity: Double = 0.35,
+        beauty: BeautySettings? = nil,
         fault: BackgroundProcessingFault = .none
     ) -> RealtimeBackgroundProcessingResult {
         let width = CVPixelBufferGetWidth(source)
@@ -541,7 +543,9 @@ public final class BackgroundReplacementProcessor {
         let extent = CGRect(x: 0, y: 0, width: width, height: height)
         // Landmark detection is independent of segmentation, so it runs
         // concurrently on its own queue; the beauty stage only waits for it.
-        let retouchActive = skinRefinementIntensity > 0
+        // `beauty` selects the real-time beauty engine; without it the legacy
+        // noise-reduction retouch (`skinRefinementIntensity`) is used.
+        let retouchActive = beauty.map(\.isActive) ?? (skinRefinementIntensity > 0)
         let toneActive = lightToneEnabled && lightToneIntensity > 0
         let faceDetection = FaceDetectionResult()
         let faceGroup = DispatchGroup()
@@ -618,8 +622,12 @@ public final class BackgroundReplacementProcessor {
             faceGroup.wait()
             let faces = faceDetection.faces
             if retouchActive {
-                foregroundImage = NaturalSkinRetouch.apply(to: foregroundImage, intensity: skinRefinementIntensity,
-                                                           faces: faces)
+                if let beauty {
+                    foregroundImage = beautyEngine.apply(to: foregroundImage, faces: faces, settings: beauty)
+                } else {
+                    foregroundImage = NaturalSkinRetouch.apply(to: foregroundImage, intensity: skinRefinementIntensity,
+                                                               faces: faces)
+                }
             }
             if toneActive {
                 foregroundImage = NaturalSkinRetouch.applyLightAndTone(to: foregroundImage,
