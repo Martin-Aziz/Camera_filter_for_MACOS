@@ -17,6 +17,7 @@ public struct SkinRefinementConfiguration: Equatable {
     public static let lightToneEnabledKey = "aurevixLightToneEnabled"
     public static let lightToneIntensityKey = "aurevixLightToneIntensity"
     public static let strengthKey = "aurevixSkinStrength"
+    public static let makeupKey = "aurevixMakeupEnabled"
     public var preset: SkinRefinementPreset
     public var intensity: Double
     public var lightToneEnabled: Bool
@@ -24,6 +25,8 @@ public struct SkinRefinementConfiguration: Equatable {
     /// Strength slider, 0...1. 0.5 is the preset's tuned default; the range
     /// spans 0 to twice that value, bounded by the 0.40 retouch maximum.
     public var strength: Double
+    /// Faint lip and cheek tint; off by default.
+    public var makeupEnabled: Bool
     public var effectiveIntensity: Double {
         guard preset != .off else { return 0 }
         guard preset == .custom else { return min(preset.intensity * 2 * strength, 0.4) }
@@ -34,15 +37,17 @@ public struct SkinRefinementConfiguration: Equatable {
     public var beautySettings: BeautySettings {
         switch preset {
         case .off: return .off
-        case .subtle: return BeautySettings(amount: strength, polished: false)
-        case .refined: return BeautySettings(amount: strength, polished: true)
-        case .custom: return BeautySettings(amount: min(max(intensity, 0), 0.4) / 0.4, polished: false)
+        case .subtle: return BeautySettings(amount: strength, polished: false, makeup: makeupEnabled)
+        case .refined: return BeautySettings(amount: strength, polished: true, makeup: makeupEnabled)
+        case .custom: return BeautySettings(amount: min(max(intensity, 0), 0.4) / 0.4, polished: false, makeup: makeupEnabled)
         }
     }
 
     public init(preset: SkinRefinementPreset = .off, intensity: Double = 0.2,
-                lightToneEnabled: Bool = false, lightToneIntensity: Double = 0.35, strength: Double = 0.5) {
+                lightToneEnabled: Bool = false, lightToneIntensity: Double = 0.35, strength: Double = 0.5,
+                makeupEnabled: Bool = false) {
         self.strength = min(max(strength, 0), 1)
+        self.makeupEnabled = makeupEnabled
         self.preset = preset
         self.intensity = min(max(intensity, 0), 0.4)
         self.lightToneEnabled = lightToneEnabled
@@ -55,7 +60,8 @@ public struct SkinRefinementConfiguration: Equatable {
                     intensity: defaults.object(forKey: intensityKey) as? Double ?? 0.2,
                     lightToneEnabled: defaults.bool(forKey: lightToneEnabledKey),
                     lightToneIntensity: defaults.object(forKey: lightToneIntensityKey) as? Double ?? 0.35,
-                    strength: defaults.object(forKey: strengthKey) as? Double ?? 0.5)
+                    strength: defaults.object(forKey: strengthKey) as? Double ?? 0.5,
+                    makeupEnabled: defaults.bool(forKey: makeupKey))
     }
     public func write(to defaults: UserDefaults? = UserDefaults(suiteName: "MPLX762T5G.com.martinaziz.privatecam")) {
         defaults?.set(preset.rawValue, forKey: Self.presetKey)
@@ -65,5 +71,6 @@ public struct SkinRefinementConfiguration: Equatable {
         let storedLightToneIntensity = min(max(lightToneIntensity, 0), 1)
         defaults?.set(storedLightToneIntensity, forKey: Self.lightToneIntensityKey)
         defaults?.set(min(max(strength, 0), 1), forKey: Self.strengthKey)
+        defaults?.set(makeupEnabled, forKey: Self.makeupKey)
     }
 }

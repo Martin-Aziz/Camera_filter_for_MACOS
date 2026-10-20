@@ -4,18 +4,28 @@ import Foundation
 import Vision
 
 /// What the beauty pass should do for one frame. `amount` is the strength
-/// slider (0...1); Polished adds under-eye, eye, teeth, lip and cheek work.
+/// slider (0...1); Polished adds stronger smoothing, under-eye, smile-line,
+/// skin-brightening, eye and teeth work. `makeup` adds a faint lip and
+/// cheek tint on top of either preset.
 public struct BeautySettings: Equatable {
     public var amount: Double
     public var polished: Bool
+    public var makeup: Bool
+    /// False only for `off`; any selected preset retouches, even at slider 0.
+    public var isActive: Bool
 
-    public init(amount: Double, polished: Bool) {
+    public init(amount: Double, polished: Bool, makeup: Bool = false) {
         self.amount = min(max(amount, 0), 1)
         self.polished = polished
+        self.makeup = makeup
+        self.isActive = true
     }
 
-    public static let off = BeautySettings(amount: 0, polished: false)
-    public var isActive: Bool { amount > 0.001 }
+    private init() {
+        amount = 0; polished = false; makeup = false; isActive = false
+    }
+
+    public static let off = BeautySettings()
 
     /// Per-effect strengths. Natural is clearly visible at call size;
     /// Polished is stronger and adds the finishing touches.
@@ -29,17 +39,29 @@ public struct BeautySettings: Equatable {
         var teeth: Double
         var lips: Double
         var cheeks: Double
+        var lineSmoothing: Double  // extra smoothing under the eyes and on smile lines
+        var skinBrighten: Double   // luminance gain on skin (0.065 = +6.5%)
     }
 
+    /// Effective strength: the slider's 60% equals the Build 31 Natural 100%,
+    /// and even 0% stays noticeable at call size.
+    var effectiveStrength: Double { 0.4 + amount }
+
     var levels: Levels {
-        let a = amount
+        let e = effectiveStrength
+        let lips = makeup ? 0.2 * e : 0
+        let cheeks = makeup ? 0.13 * e : 0
         if polished {
-            return Levels(smoothing: min(0.95 * a + 0.05, 0.95), detailCut: 0.5 * a, toneEvening: 0.7 * a,
-                          redness: 0.6 * a, underEye: 0.8 * a, eyes: 0.7 * a, teeth: 0.7 * a,
-                          lips: 0.6 * a, cheeks: 0.4 * a)
+            return Levels(smoothing: min(0.9 * e + 0.08, 0.97), detailCut: min(0.45 * e, 0.6),
+                          toneEvening: min(0.55 * e, 0.75), redness: min(0.6 * e, 0.8),
+                          underEye: min(0.9 * e, 1.25), eyes: min(0.7 * e, 0.9), teeth: min(0.7 * e, 0.9),
+                          lips: lips, cheeks: cheeks, lineSmoothing: min(0.8 * e, 1),
+                          skinBrighten: 0.055 * min(e, 1.4) / 1.4 + 0.025)
         }
-        return Levels(smoothing: min(0.8 * a + 0.05, 0.85), detailCut: 0.35 * a, toneEvening: 0.5 * a,
-                      redness: 0.4 * a, underEye: 0, eyes: 0, teeth: 0, lips: 0, cheeks: 0)
+        return Levels(smoothing: min(0.8 * e + 0.05, 0.92), detailCut: min(0.35 * e, 0.5),
+                      toneEvening: min(0.5 * e, 0.7), redness: min(0.4 * e, 0.6),
+                      underEye: 0, eyes: 0, teeth: 0, lips: lips, cheeks: cheeks,
+                      lineSmoothing: min(0.5 * e, 0.7), skinBrighten: 0)
     }
 }
 
@@ -57,6 +79,7 @@ final class BeautyRetouchEngine {
     private var smoothedRegions: [String: [CGPoint]] = [:]
     private var smoothedBox: CGRect?
     private var skinChroma = SIMD2<Double>(-0.045, 0.075) // gamma-space Cb, Cr of the cheeks
+    private var skinLuma = 0.6                              // gamma-space luma of the cheeks
     private var skinChromaInitialized = false
     private var frameCounter = 0
 
@@ -111,8 +134,12 @@ final class BeautyRetouchEngine {
                          (workPoints("leftEyebrow"), 1.35), (workPoints("rightEyebrow"), 1.35),
                          (workPoints("outerLips"), 1.12)],
             nose: workPoints("nose"))
+        // Beard and stubble: in the lower face, pixels clearly darker than the
+        // cheeks are left alone (texture, mustache and beard stay as they are).
+        let beardZone = feathered(masks.beardZone(nose: workPoints("nose"), contour: workPoints("faceContour"),
+                                                  faceBox: faceBox), radius: 3, extent: workExtent)
         let skinLikelihood = kernels.skin.apply(extent: workExtent, arguments: [
-            work, CIVector(x: skinChroma.x, y: skinChroma.y), 0.06])!
+            work, beardZone, CIVector(x: skinChroma.x, y: skinChroma.y), 0.06, skinLuma])!
             // Nothing is changed near the crop border, so no seam can appear there.
             .applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: edgeFade(workExtent)])
             .cropped(to: workExtent)
@@ -122,7 +149,7 @@ final class BeautyRetouchEngine {
 
         // Edge-preserving smoothing: self-guided filter on the work crop.
         let radius = max(2.0, Double(workSize.width) * 0.022)
-        let epsilon = 0.0009 + 0.0035 * settings.amount
+        let epsilon = 0.0009 + 0.0028 * settings.effectiveStrength
         let mean = boxBlur(work, radius: radius, extent: workExtent)
         let meanSquare = boxBlur(kernels.square.apply(extent: workExtent, arguments: [work])!, radius: radius, extent: workExtent)
         let a = kernels.guidedA.apply(extent: workExtent, arguments: [mean, meanSquare, epsilon])!
@@ -138,13 +165,37 @@ final class BeautyRetouchEngine {
             smooth, low, CIVector(x: skinChroma.x, y: skinChroma.y), levels.toneEvening, levels.redness])!
         var retouchedWork = blend(toned, over: work, mask: skinMask, strength: levels.smoothing, extent: workExtent)
 
-        if levels.underEye > 0 {
-            let underEye = masks.underEye(leftEye: workPoints("leftEye"), rightEye: workPoints("rightEye"))
-            let underEyeMask = feathered(underEye, radius: 3, extent: workExtent)
+        // Under-eye and smile lines get extra smoothing from a wider, softer pass.
+        let underEye = masks.underEye(leftEye: workPoints("leftEye"), rightEye: workPoints("rightEye"))
+        let underEyeMask = feathered(underEye, radius: 3, extent: workExtent)
+            .applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: skinLikelihood])
+            .cropped(to: workExtent)
+        if levels.lineSmoothing > 0 {
+            let lines = masks.smileLines(nose: workPoints("nose"), outerLips: workPoints("outerLips"),
+                                         faceWidth: faceBox.width)
+            let lineMask = feathered(lines, radius: 3.5, extent: workExtent)
+                .applyingFilter("CIMaximumCompositing", parameters: [kCIInputBackgroundImageKey: underEyeMask])
                 .applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: skinLikelihood])
                 .cropped(to: workExtent)
+            let wideRadius = radius * 1.7
+            let wideMean = boxBlur(work, radius: wideRadius, extent: workExtent)
+            let wideMeanSquare = boxBlur(kernels.square.apply(extent: workExtent, arguments: [work])!,
+                                         radius: wideRadius, extent: workExtent)
+            let wideA = kernels.guidedA.apply(extent: workExtent, arguments: [wideMean, wideMeanSquare, epsilon * 3])!
+            let wideB = kernels.guidedB.apply(extent: workExtent, arguments: [wideMean, wideA])!
+            let wideSmooth = kernels.guidedOutput.apply(extent: workExtent, arguments: [
+                retouchedWork, boxBlur(wideA, radius: wideRadius, extent: workExtent),
+                boxBlur(wideB, radius: wideRadius, extent: workExtent)])!
+            retouchedWork = blend(wideSmooth, over: retouchedWork, mask: lineMask, strength: levels.lineSmoothing,
+                                  extent: workExtent)
+        }
+        if levels.underEye > 0 {
             let lifted = kernels.lift.apply(extent: workExtent, arguments: [retouchedWork, levels.underEye])!
             retouchedWork = blend(lifted, over: retouchedWork, mask: underEyeMask, strength: 1, extent: workExtent)
+        }
+        if levels.skinBrighten > 0 {
+            let brighter = kernels.brighten.apply(extent: workExtent, arguments: [retouchedWork, levels.skinBrighten])!
+            retouchedWork = blend(brighter, over: retouchedWork, mask: skinMask, strength: 1, extent: workExtent)
         }
 
         // Back to full resolution: add the low-frequency change, and remove part
@@ -188,7 +239,7 @@ final class BeautyRetouchEngine {
             let cheekMask = feathered(cheeks, radius: 7, extent: workExtent)
                 .applyingFilter("CIMultiplyCompositing", parameters: [kCIInputBackgroundImageKey: skinLikelihood])
                 .cropped(to: workExtent).transformed(by: fromWork).cropped(to: region)
-            let warmed = kernels.warm.apply(extent: region, arguments: [result, levels.cheeks])!
+            let warmed = kernels.cheekGlow.apply(extent: region, arguments: [result, levels.cheeks])!
             result = blend(warmed, over: result, mask: cheekMask, strength: 1, extent: region)
         }
         return result.cropped(to: region).composited(over: image).cropped(to: extent)
@@ -260,6 +311,7 @@ final class BeautyRetouchEngine {
 
     private func sampleSkinChroma(_ work: CIImage, cheeks: [CGRect]) {
         var samples: [SIMD2<Double>] = []
+        var lumas: [Double] = []
         for rect in cheeks {
             let average = work.applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: rect)])
             var pixel = [Float](repeating: 0, count: 4)
@@ -269,12 +321,15 @@ final class BeautyRetouchEngine {
             let y = 0.299 * g[0] + 0.587 * g[1] + 0.114 * g[2]
             guard y > 0.12 else { continue }
             samples.append(SIMD2((g[2] - y) * 0.564, (g[0] - y) * 0.713))
+            lumas.append(y)
         }
         guard !samples.isEmpty else { return }
         let mean = samples.reduce(SIMD2<Double>(0, 0), +) / Double(samples.count)
         // Only plausible skin chroma is accepted; the color then drifts slowly.
         guard mean.y > 0.0, mean.y < 0.25, mean.x > -0.2, mean.x < 0.05 else { return }
+        let luma = lumas.reduce(0, +) / Double(lumas.count)
         skinChroma = skinChromaInitialized ? skinChroma + (mean - skinChroma) * 0.25 : mean
+        skinLuma = skinChromaInitialized ? skinLuma + (luma - skinLuma) * 0.25 : luma
         skinChromaInitialized = true
     }
 
@@ -401,6 +456,41 @@ private struct MaskPainter {
         }
     }
 
+    /// Lower face from the nose downward, where stubble and beard grow.
+    func beardZone(nose: [CGPoint], contour: [CGPoint], faceBox: CGRect) -> CIImage {
+        draw { context in
+            guard nose.count > 2, contour.count > 2 else { return }
+            let noseBottom = nose.map(\.y).min()! + (nose.map(\.y).max()! - nose.map(\.y).min()!) * 0.15
+            context.setFillColor(gray: 1, alpha: 1)
+            context.saveGState()
+            context.clip(to: CGRect(x: faceBox.minX - faceBox.width * 0.1, y: 0,
+                                    width: faceBox.width * 1.2, height: noseBottom))
+            if let path = Self.path(contour, grow: 1.08) { context.addPath(path); context.fillPath() }
+            context.fill(CGRect(x: faceBox.midX - faceBox.width * 0.3, y: 0, width: faceBox.width * 0.6, height: noseBottom))
+            context.restoreGState()
+        }
+    }
+
+    /// Thick strokes from each nose wing past the mouth corner (nasolabial folds).
+    func smileLines(nose: [CGPoint], outerLips: [CGPoint], faceWidth: CGFloat) -> CIImage {
+        draw { context in
+            guard nose.count > 2, outerLips.count > 2 else { return }
+            let noseLeft = nose.min(by: { $0.x < $1.x })!, noseRight = nose.max(by: { $0.x < $1.x })!
+            let mouthLeft = outerLips.min(by: { $0.x < $1.x })!, mouthRight = outerLips.max(by: { $0.x < $1.x })!
+            context.setStrokeColor(gray: 1, alpha: 1)
+            context.setLineWidth(faceWidth * 0.075)
+            context.setLineCap(.round)
+            for (wing, corner, outward) in [(noseLeft, mouthLeft, CGFloat(-1)), (noseRight, mouthRight, CGFloat(1))] {
+                let start = CGPoint(x: wing.x + outward * faceWidth * 0.03, y: wing.y + faceWidth * 0.01)
+                let end = CGPoint(x: corner.x + outward * faceWidth * 0.04, y: corner.y - faceWidth * 0.06)
+                context.move(to: start)
+                context.addQuadCurve(to: end, control: CGPoint(x: (start.x + end.x) / 2 + outward * faceWidth * 0.05,
+                                                              y: (start.y + end.y) / 2))
+                context.strokePath()
+            }
+        }
+    }
+
     func underEye(leftEye: [CGPoint], rightEye: [CGPoint]) -> CIImage {
         draw { context in
             context.setFillColor(gray: 1, alpha: 1)
@@ -450,7 +540,8 @@ private struct Kernels {
     let lift: CIColorKernel
     let teeth: CIColorKernel
     let lipTint: CIColorKernel
-    let warm: CIColorKernel
+    let cheekGlow: CIColorKernel
+    let brighten: CIColorKernel
     let difference: CIColorKernel
     let recombine: CIColorKernel
 
@@ -491,10 +582,12 @@ private struct Kernels {
                 }
                 """),
               let skin = make("""
-                kernel vec4 k(__sample s, vec2 target, float tol) {
+                kernel vec4 k(__sample s, __sample beardZone, vec2 target, float tol, float targetY) {
                     \(toYCC)
                     float d = distance(vec2(cb, cr), target);
                     float w = (1.0 - smoothstep(tol * 0.55, tol, d)) * smoothstep(0.08, 0.2, y);
+                    float beard = beardZone.r * (1.0 - smoothstep(0.72, 0.9, y / max(targetY, 0.05)));
+                    w *= 1.0 - beard;
                     return vec4(w, w, w, 1.0);
                 }
                 """),
@@ -518,17 +611,24 @@ private struct Kernels {
               let lipTint = make("""
                 kernel vec4 k(__sample s, float t) {
                     \(toYCC)
-                    cb *= 1.0 + 0.12 * t;
-                    cr *= 1.0 + 0.22 * t;
-                    cr += 0.008 * t;
+                    cb *= 1.0 + 0.2 * t;
+                    cr *= 1.0 + 0.2 * t;
                     \(fromYCC)
                 }
                 """),
-              let warm = make("""
+              let cheekGlow = make("""
                 kernel vec4 k(__sample s, float t) {
                     \(toYCC)
-                    cr += 0.018 * t;
-                    cb -= 0.006 * t;
+                    y += 0.05 * t * (1.0 - y);
+                    cb *= 1.0 + 0.08 * t;
+                    cr *= 1.0 + 0.08 * t;
+                    \(fromYCC)
+                }
+                """),
+              let brighten = make("""
+                kernel vec4 k(__sample s, float t) {
+                    \(toYCC)
+                    y = min(y * (1.0 + t), 1.0);
                     \(fromYCC)
                 }
                 """),
@@ -542,6 +642,6 @@ private struct Kernels {
         else { return nil }
         self.square = square; self.guidedA = guidedA; self.guidedB = guidedB; self.guidedOutput = guidedOutput
         self.tone = tone; self.skin = skin; self.lift = lift; self.teeth = teeth; self.lipTint = lipTint
-        self.warm = warm; self.difference = difference; self.recombine = recombine
+        self.cheekGlow = cheekGlow; self.brighten = brighten; self.difference = difference; self.recombine = recombine
     }
 }

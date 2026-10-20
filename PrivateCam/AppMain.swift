@@ -288,6 +288,12 @@ struct ContentView: View {
                     }.pickerStyle(.segmented).labelsHidden().fixedSize()
                     if controller.skinPreset != .off {
                         labeledSlider("Strength", value: $controller.skinStrength, low: "subtle", high: "strong")
+                        HStack(spacing: 10) {
+                            Text("Makeup").frame(width: 74, alignment: .leading)
+                            Toggle("Makeup", isOn: $controller.makeupEnabled).toggleStyle(.switch).labelsHidden()
+                                .controlSize(.small)
+                            Text("a faint lip and cheek tint").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Divider()

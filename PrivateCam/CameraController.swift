@@ -35,6 +35,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
     @Published var skinPreset: SkinRefinementPreset = .off { didSet { persistSkinConfiguration() } }
     @Published var skinIntensity: Double = 0.2 { didSet { persistSkinConfiguration() } }
     @Published var skinStrength: Double = 0.5 { didSet { persistSkinConfiguration() } }
+    @Published var makeupEnabled = false { didSet { persistSkinConfiguration() } }
     @Published var lightToneEnabled = false { didSet { persistSkinConfiguration() } }
     @Published var lightToneIntensity = 0.35 { didSet { persistSkinConfiguration() } }
     @Published var processingStatus = "Processing status unavailable. Start a virtual-camera client to confirm."
@@ -139,6 +140,7 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
             skinStrength = skin.strength
         }
         lightToneEnabled = skin.lightToneEnabled
+        makeupEnabled = skin.makeupEnabled
         lightToneIntensity = skin.lightToneIntensity
         refreshPersonalBackgrounds()
         removeDuplicatePersonalBackgrounds()
@@ -461,7 +463,8 @@ final class CameraController: NSObject, ObservableObject, OSSystemExtensionReque
         guard !isRestoringConfiguration else { return }
         SkinRefinementConfiguration(preset: skinPreset, intensity: min(max(skinIntensity, 0), 0.4),
                                     lightToneEnabled: lightToneEnabled,
-                                    lightToneIntensity: lightToneIntensity, strength: skinStrength).write()
+                                    lightToneIntensity: lightToneIntensity, strength: skinStrength,
+                                    makeupEnabled: makeupEnabled).write()
     }
 
     func importBackground(from sourceURL: URL) throws {
