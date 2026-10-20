@@ -29,6 +29,17 @@ public struct SkinRefinementConfiguration: Equatable {
         guard preset == .custom else { return min(preset.intensity * 2 * strength, 0.4) }
         return min(max(intensity, 0), 0.4)
     }
+    /// Real-time beauty settings: Natural/Polished scaled by the strength
+    /// slider; a legacy Custom value maps its 0...0.40 range onto 0...1.
+    public var beautySettings: BeautySettings {
+        switch preset {
+        case .off: return .off
+        case .subtle: return BeautySettings(amount: strength, polished: false)
+        case .refined: return BeautySettings(amount: strength, polished: true)
+        case .custom: return BeautySettings(amount: min(max(intensity, 0), 0.4) / 0.4, polished: false)
+        }
+    }
+
     public init(preset: SkinRefinementPreset = .off, intensity: Double = 0.2,
                 lightToneEnabled: Bool = false, lightToneIntensity: Double = 0.35, strength: Double = 0.5) {
         self.strength = min(max(strength, 0), 1)

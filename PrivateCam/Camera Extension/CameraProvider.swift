@@ -601,9 +601,9 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         let beauty = SkinRefinementConfiguration.read()
         let effectsOn = configuration.effectsEnabled
         let result = backgroundProcessor.process(pixelBuffer: source, outputPool: pool, treatment: treatment,
-                                                  skinRefinementIntensity: effectsOn ? beauty.effectiveIntensity : 0,
                                                   lightToneEnabled: effectsOn && beauty.lightToneEnabled,
-                                                  lightToneIntensity: beauty.lightToneIntensity)
+                                                  lightToneIntensity: beauty.lightToneIntensity,
+                                                  beauty: effectsOn ? beauty.beautySettings : .off)
 
         // All checks that authorize publication and the send itself run on the
         // stream state queue. The raw capture buffer is never sent.
@@ -730,7 +730,8 @@ final class PrivateCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
               let pool, CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &source) == kCVReturnSuccess,
               let source else { return }
         let result = backgroundProcessor.process(pixelBuffer: source, outputPool: pool, treatment: .blur(radius: 12),
-                                                  skinRefinementIntensity: 0.16, lightToneEnabled: true)
+                                                  lightToneEnabled: true,
+                                                  beauty: BeautySettings(amount: 1, polished: true))
         logger.notice("processing warm-up finished elapsed_ms=\(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000, privacy: .public) neutral=\(result.usedNeutralFallback, privacy: .public)")
     }
 

@@ -161,6 +161,49 @@ final class SegmentationTests: XCTestCase {
         XCTAssertFalse(imagesEqual(source, result.image), "success output must not forward the original frame")
     }
 
+    func testBeautySettingsFollowPresetAndStrength() {
+        XCTAssertFalse(SkinRefinementConfiguration(preset: .off, strength: 1).beautySettings.isActive)
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .subtle, strength: 0.5).beautySettings,
+                       BeautySettings(amount: 0.5, polished: false))
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .refined, strength: 1).beautySettings,
+                       BeautySettings(amount: 1, polished: true))
+        XCTAssertEqual(SkinRefinementConfiguration(preset: .custom, intensity: 0.2).beautySettings.amount, 0.5, accuracy: 0.001)
+    }
+
+    /// Polished retouch changes the face but leaves pixels away from it
+    /// untouched (a large single graph once produced tile-shaped changes).
+    func testBeautyRetouchChangesOnlyTheFaceArea() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "Portrait-CC0", withExtension: "jpg"))
+        let loaded = try XCTUnwrap(CIImage(contentsOf: url))
+        let scale = 720 / loaded.extent.height
+        let scaled = loaded.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let frame = scaled.transformed(by: CGAffineTransform(translationX: (1280 - scaled.extent.width) / 2 - scaled.extent.minX,
+                                                             y: -scaled.extent.minY))
+            .composited(over: CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5)))
+        let pool = try makeNV12Pool()
+        let source = try makeNV12Buffer(from: frame, pool: pool)
+        let processor = BackgroundReplacementProcessor(quality: .balanced)
+        var result = processor.process(pixelBuffer: source, outputPool: pool, treatment: .original,
+                                       beauty: BeautySettings(amount: 1, polished: true))
+        result = processor.process(pixelBuffer: source, outputPool: pool, treatment: .original,
+                                   beauty: BeautySettings(amount: 1, polished: true))
+        XCTAssertFalse(result.usedNeutralFallback, result.failureReason ?? "unexpected fallback")
+        let context = CIContext()
+        func meanDifference(_ rect: CGRect) -> Float {
+            let difference = CIImage(cvPixelBuffer: result.pixelBuffer)
+                .applyingFilter("CIDifferenceBlendMode", parameters: [kCIInputBackgroundImageKey: CIImage(cvPixelBuffer: source)])
+                .applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: rect)])
+            var pixel = [Float](repeating: 0, count: 4)
+            context.render(difference, toBitmap: &pixel, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                           format: .RGBAf, colorSpace: nil)
+            return pixel.prefix(3).reduce(0, +) / 3
+        }
+        XCTAssertGreaterThan(meanDifference(CGRect(x: 0, y: 0, width: 1280, height: 720)), 0.0002, "retouch should change the face")
+        for corner in [CGRect(x: 0, y: 0, width: 120, height: 120), CGRect(x: 1160, y: 600, width: 120, height: 120)] {
+            XCTAssertLessThan(meanDifference(corner), 0.002, "pixels away from the face must stay unchanged")
+        }
+    }
+
     func testSolidBackgroundModeReturnsAFullSizeComposite() throws {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "Portrait-CC0", withExtension: "jpg"))
         let source = try loadDownsampledImage(at: url, maximumDimension: 640)
