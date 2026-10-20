@@ -53,7 +53,7 @@ public struct BeautySettings: Equatable {
 /// frames so the masks do not jump. Not thread-safe: call from one queue.
 final class BeautyRetouchEngine {
     private let context: CIContext
-    private let workSide: CGFloat = 288
+    private let workSide: CGFloat = 224
     private var smoothedRegions: [String: [CGPoint]] = [:]
     private var smoothedBox: CGRect?
     private var skinChroma = SIMD2<Double>(-0.045, 0.075) // gamma-space Cb, Cr of the cheeks
@@ -97,9 +97,9 @@ final class BeautyRetouchEngine {
         let full = image.cropped(to: region)
         let work = full.transformed(by: toWork).cropped(to: workExtent)
 
-        // Skin color target, refreshed every few frames from both cheeks.
+        // Skin color target, refreshed every 10 frames from both cheeks.
         frameCounter &+= 1
-        if !skinChromaInitialized || frameCounter % 5 == 0 {
+        if !skinChromaInitialized || frameCounter % 10 == 0 {
             sampleSkinChroma(work, cheeks: cheekRects(geometry: geometry, toWork: toWork, workSize: workSize))
         }
 
